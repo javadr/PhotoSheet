@@ -1,0 +1,23 @@
+[project]
+name = "photosheet"
+dynamic = ["version"]
+description = "Print many photos per sheet, with ICC colour management (Python/Qt rewrite of PhotoPrint)"
+requires-python = ">=3.10"
+dependencies = ["PySide6", "Pillow", "numpy"]
+
+[project.scripts]
+photosheet = "photosheet.__main__:main"
+photosheet-cli = "photosheet.cli:main"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "photosheet.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["photosheet*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
