@@ -164,3 +164,33 @@ def test_strip_geometry_pagination_and_outlines():
     assert len(s.cut_guides(0)) == 8 and len(s.cut_guides(1)) == 4                                 # only strips in use
     with pytest.raises(ValueError):
         Strip(frames=40, strip_h=100)
+
+
+def test_passport_four_by_two_on_landscape_4x6_like_a_photo_shop():
+    from photosheet.core.layouts import MM, Passport
+    page = PageExtent(432, 288)                       # 6 x 4 in landscape
+    page.set_margins(4, 4, 4, 4)
+    p = Passport(page=page, cell_w=35 * MM, cell_h=45 * MM, hgutter=4, vgutter=4)
+    assert (p.cols, p.rows, p.per_page) == (4, 2, 8)  # the classic "8 passport photos on a 4x6"
+    p.add(ImageItem("me.jpg"))
+    assert p.pages == 1 and len(p.slots(0)) == 8      # fill sheet: one photo repeated into every slot
+    assert all(img is p.images[0] for img, _ in p.slots(0))
+    rects = [r for _, r in p.slots(0)]
+    assert all(r.x >= 4 - 1e-6 and r.x + r.w <= 428 + 1e-6 and r.y >= 4 - 1e-6 and r.y + r.h <= 284 + 1e-6 for r in rects)
+
+
+def test_passport_copies_and_sharing_the_sheet():
+    from photosheet.core.layouts import MM, Passport
+    page = PageExtent(432, 288)
+    page.set_margins(4, 4, 4, 4)
+    p = Passport(page=page, cell_w=35 * MM, cell_h=45 * MM, hgutter=4, vgutter=4)
+    for n in ("a.jpg", "b.jpg"):
+        p.add(ImageItem(n))
+    assert [i.path for i, _ in p.slots(0)] == ["a.jpg"] * 4 + ["b.jpg"] * 4   # two people share one sheet
+    p.copies = 6
+    assert p.pages == 2 and len(p.slots(1)) == 4                              # 12 prints -> 8 + 4
+    p.copies = 0
+    p.images.clear()
+    assert p.pages == 1 and p.slots(0) == []                                  # no photos: empty, no crash
+    with pytest.raises(ValueError):
+        Passport(copies=-1)

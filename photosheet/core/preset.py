@@ -5,10 +5,10 @@ import json
 from dataclasses import asdict, fields
 
 from .geometry import PageExtent
-from .layouts import Carousel, FixedSize, ImageItem, Layout, Mosaic, NUp, Poster, Single, Strip
+from .layouts import Carousel, FixedSize, ImageItem, Layout, Mosaic, NUp, Passport, Poster, Single, Strip
 
 TYPES = {"nup": NUp, "single": Single, "poster": Poster, "carousel": Carousel,
-         "fixed": FixedSize, "mosaic": Mosaic, "strip": Strip}
+         "fixed": FixedSize, "mosaic": Mosaic, "strip": Strip, "passport": Passport}
 
 
 def kind(layout: Layout) -> str:

@@ -124,3 +124,13 @@ def test_marks_captions_and_strip_render(red, tmp_path):
                  ["--layout", "fixed", "--marks"]):
         out = tmp_path / "o.pdf"
         assert cli.main([red, red, "-o", str(out), "--dpi", "50", *args]) == 0 and out.stat().st_size > 0
+
+
+def test_cli_passport_4x6_landscape_renders_eight_copies(red, tmp_path):
+    out = tmp_path / "passport.png"
+    assert cli.main([red, "-o", str(out), "--layout", "passport", "--page", "4x6", "--landscape",
+                     "--margin", "4", "--crop", "--dpi", "72"]) == 0
+    im = Image.open(out)
+    assert im.size == (432, 288)
+    red_blocks = sum(1 for x in (60, 165, 270, 375) for y in (70, 215) if im.getpixel((x, y)) == (255, 0, 0))
+    assert red_blocks == 8                                  # one photo copied into all 4 x 2 slots

@@ -15,17 +15,19 @@ from PySide6.QtWidgets import (
 
 from ..core import preset
 from ..core.geometry import PageExtent
-from ..core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Poster, Single, Strip
+from ..core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Passport, Poster, Single, Strip
 from ..core.render import render_page
 
-PAGES = {"A4": (595, 842), "Letter": (612, 792)}
+PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
+         "4 × 6 in": (288, 432), "5 × 7 in": (360, 504)}   # portrait points; Orientation turns them
 KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
-         "Fixed size": FixedSize, "Mosaic": Mosaic, "Photo strip": Strip}
+         "Fixed size": FixedSize, "Passport": Passport, "Mosaic": Mosaic, "Photo strip": Strip}
 KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "carousel",
-        "Fixed size": "fixed", "Mosaic": "mosaic", "Photo strip": "strip"}
+        "Fixed size": "fixed", "Passport": "passport", "Mosaic": "mosaic", "Photo strip": "strip"}
 SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
                 "Wallet 2.5 × 3.5 in": (63.5, 88.9), "4 × 6 in": (101.6, 152.4),
-                "5 × 7 in": (127, 177.8), "Custom": None}
+                "5 × 7 in": (127, 177.8), "ID 30 × 40 mm": (30, 40), "China visa 33 × 48 mm": (33, 48),
+                "Canada passport 50 × 70 mm": (50, 70), "Custom": None}
 IMG_FILTER = "Images (*.jpg *.jpeg *.png *.tif *.tiff *.bmp *.webp);;All files (*)"
 
 
@@ -271,6 +273,13 @@ class MainWindow(QMainWindow):
         self.kind.addItems(KINDS)
         self.page_size = QComboBox()
         self.page_size.addItems(PAGES)
+        self.orient = QComboBox()
+        self.orient.addItems(["Portrait", "Landscape"])
+        self.copies = self._spin(0, 99, 0)
+        self.copies.setSpecialValueText("Fill sheet")   # 0: share the sheet between the photos
+        self.copies.setToolTip("Copies of each photo. 'Fill sheet' repeats a single photo into every slot.")
+        self.per_sheet = QLabel("")
+        self._last_kind = "N-up"
         self.margin = self._spin(0, 200, 18)
         self.rows, self.cols = self._spin(1, 20, 2), self._spin(1, 20, 2)
         self.gutter = self._spin(0, 100, 8)
@@ -291,21 +300,22 @@ class MainWindow(QMainWindow):
         form = QFormLayout()
         self.rowsof = {}
         for key, label, w in [
-            ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Margin (pt)", self.margin),
-            ("nup", "Rows", self.rows), ("nup", "Columns", self.cols), ("nup,fixed,mosaic,strip", "Gutter (pt)", self.gutter),
-            ("nup", "Captions", self.caption), ("nup,fixed", "", self.marks),
+            ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Orientation", self.orient), ("all", "Margin (pt)", self.margin),
+            ("nup", "Rows", self.rows), ("nup", "Columns", self.cols), ("nup,fixed,passport,mosaic,strip", "Gutter (pt)", self.gutter),
+            ("nup", "Captions", self.caption), ("nup,fixed,passport", "", self.marks),
             ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
-            ("fixed", "Print size", self.size_preset), ("fixed", "Width (mm)", self.cell_w),
-            ("fixed", "Height (mm)", self.cell_h), ("mosaic", "Row height (mm)", self.row_h),
+            ("fixed,passport", "Print size", self.size_preset), ("fixed,passport", "Width (mm)", self.cell_w),
+            ("fixed,passport", "Height (mm)", self.cell_h), ("passport", "Copies per photo", self.copies),
+            ("fixed,passport", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
             ("strip", "Frames per strip", self.frames), ("strip", "Strip width (mm)", self.strip_w),
             ("strip", "Strip height (mm)", self.strip_h),
             ("all", "", self.crop),
         ]:
             form.addRow(label, w)
             self.rowsof.setdefault(key, []).append(w)
-            if w is self.size_preset:
+            if w is self.size_preset or w is self.per_sheet:
                 continue  # wired to _apply_size_preset, which then calls _layout_changed
             w_changed = getattr(w, "currentIndexChanged", None) or getattr(w, "toggled", None) or w.valueChanged
             w_changed.connect(self._layout_changed)
@@ -393,7 +403,17 @@ class MainWindow(QMainWindow):
         self._show_kind_rows()
         old = self.layout_
         cls = KINDS[self.kind.currentText()]
-        page = PageExtent(*PAGES[self.page_size.currentText()])
+        pw, ph = PAGES[self.page_size.currentText()]
+        if self.orient.currentText() == "Landscape":
+            pw, ph = ph, pw
+        page = PageExtent(pw, ph)
+        kind = self.kind.currentText()
+        if kind == "Passport" and self._last_kind != "Passport":
+            for sp, v in ((self.margin, 4), (self.gutter, 4)):   # shop-style sheets are nearly borderless
+                sp.blockSignals(True)
+                sp.setValue(v)
+                sp.blockSignals(False)
+        self._last_kind = kind
         m = self.margin.value()
         if not page.set_margins(m, m, m, m):
             return
@@ -407,9 +427,11 @@ class MainWindow(QMainWindow):
                       angle_offset=self.angle.value(), inner_radius=self.inner.value())
         elif cls is Poster:
             kw = dict(poster_w=self.poster_w.value() * 72, poster_h=self.poster_h.value() * 72)
-        elif cls is FixedSize:
+        elif cls in (FixedSize, Passport):
             kw = dict(cell_w=self.cell_w.value() * MM, cell_h=self.cell_h.value() * MM,
                       hgutter=self.gutter.value(), vgutter=self.gutter.value(), marks=self.marks.isChecked())
+            if cls is Passport:
+                kw["copies"] = self.copies.value()
         elif cls is Strip:
             kw = dict(frames=self.frames.value(), strip_w=self.strip_w.value() * MM,
                       strip_h=self.strip_h.value() * MM, gutter=self.gutter.value())
@@ -419,7 +441,12 @@ class MainWindow(QMainWindow):
         for it in old.images:
             it.crop = self.crop.isChecked()
             self.layout_.add(it)
+        self._update_per_sheet()
         self.refresh()
+
+    def _update_per_sheet(self):
+        lay = self.layout_
+        self.per_sheet.setText(f"{lay.cols} × {lay.rows} = {lay.per_page} photos" if isinstance(lay, FixedSize) else "")
 
     def _sync_controls(self):
         """Push self.layout_ into the widgets (after loading a preset)."""
@@ -427,9 +454,12 @@ class MainWindow(QMainWindow):
         lay = self.layout_
         name = next(n for n, c in KINDS.items() if type(lay) is c)
         self.kind.setCurrentText(name)
+        self._last_kind = name
         for n, (w, h) in PAGES.items():
-            if (w, h) == (lay.page.width, lay.page.height):
-                self.page_size.setCurrentText(n)
+            for orient, dims in (("Portrait", (w, h)), ("Landscape", (h, w))):
+                if dims == (lay.page.width, lay.page.height):
+                    self.page_size.setCurrentText(n)
+                    self.orient.setCurrentText(orient)
         self.margin.setValue(int(lay.page.left))
         for attr, w in [("rows", self.rows), ("cols", self.cols), ("hgutter", self.gutter),
                         ("gutter", self.gutter), ("frames", self.frames), ("segments", self.segments), ("overlap", self.overlap),
@@ -439,6 +469,8 @@ class MainWindow(QMainWindow):
         if isinstance(lay, Poster):
             self.poster_w.setValue(int(lay.poster_w / 72))
             self.poster_h.setValue(int(lay.poster_h / 72))
+        if isinstance(lay, Passport):
+            self.copies.setValue(lay.copies)
         if isinstance(lay, FixedSize):
             self.cell_w.setValue(lay.cell_w / MM)
             self.cell_h.setValue(lay.cell_h / MM)
@@ -454,6 +486,7 @@ class MainWindow(QMainWindow):
         self.marks.setChecked(lay.marks)
         self._loading = False
         self._show_kind_rows()
+        self._update_per_sheet()
         self._fill_list()
 
     def dragEnterEvent(self, e):
@@ -604,7 +637,7 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def _page_mouse(self, ev) -> bool:
-        if isinstance(self.layout_, (Carousel, Poster)):  # overlapping wedges / one tiled image: swap makes no sense
+        if isinstance(self.layout_, (Carousel, Poster, Passport)):  # overlapping wedges / one tiled image / one photo in many slots
             return False
         t, left = ev.type(), Qt.MouseButton.LeftButton
         if t == QEvent.Type.MouseButtonPress and ev.button() == left:

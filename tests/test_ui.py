@@ -365,3 +365,41 @@ def test_no_empty_strip_below_navigation_and_errors_still_show(app, tmp_path):
     assert w.statusBar().isVisible() and "boom" in w.statusBar().currentMessage()
     w._on_rendered(w._gen, QImage())                        # next good render clears it again
     assert not w.statusBar().isVisible()
+
+
+def test_passport_layout_four_by_two_on_landscape_4x6(app, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import MM, Passport
+    w = _win_with_images(tmp_path, 1)
+    w.show()
+    w.kind.setCurrentText("Passport")
+    assert isinstance(w.layout_, Passport) and w.copies.isVisible() and w.per_sheet.isVisible()
+    assert (w.margin.value(), w.gutter.value()) == (4, 4)          # switched to shop-style near-borderless
+    w.page_size.setCurrentText("4 × 6 in")
+    w.orient.setCurrentText("Landscape")
+    assert (w.layout_.page.width, w.layout_.page.height) == (432, 288)
+    assert w.per_sheet.text() == "4 × 2 = 8 photos"
+    assert len(w.layout_.slots(0)) == 8                            # one photo, "Fill sheet"
+    w.copies.setValue(3)
+    assert w.layout_.copies == 3 and len(w.layout_.slots(0)) == 3
+    w.size_preset.setCurrentText("US passport 2 × 2 in")
+    assert w.per_sheet.text() == "2 × 1 = 2 photos"
+    f = str(tmp_path / "p.json")
+    preset.save(w.layout_, f)
+    w.kind.setCurrentText("N-up")
+    w.orient.setCurrentText("Portrait")
+    w.layout_ = preset.load(f)
+    w._sync_controls()
+    assert (w.kind.currentText(), w.page_size.currentText(), w.orient.currentText(), w.copies.value()) == \
+        ("Passport", "4 × 6 in", "Landscape", 3)
+    assert abs(w.cell_w.value() - 50.8) < .06 and w.size_preset.currentText() == "US passport 2 × 2 in"
+
+
+def test_orientation_applies_to_every_layout_and_passport_drag_is_off(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = _ready_window(app, tmp_path)
+    w.orient.setCurrentText("Landscape")
+    assert w.layout_.page.width > w.layout_.page.height
+    w.kind.setCurrentText("Passport")
+    _mouse(app, w, "press", QPointF(300, 300))
+    assert w._press is None

@@ -238,6 +238,9 @@ class FixedSize(Layout):
         if self.cell_w <= 0 or self.cell_h <= 0:
             raise ValueError("cell size must be > 0")
 
+    def _items(self) -> list[ImageItem]:
+        return self.images
+
     @property
     def cols(self) -> int:
         return max(1, int((self.page.imageable_w + self.hgutter) // (self.cell_w + self.hgutter)))
@@ -252,7 +255,7 @@ class FixedSize(Layout):
 
     @property
     def pages(self) -> int:
-        return max(1, ceil_div(len(self.images), self.per_page))
+        return max(1, ceil_div(len(self._items()), self.per_page))
 
     def slots(self, page: int):
         p = self.page
@@ -260,7 +263,7 @@ class FixedSize(Layout):
         y0 = p.top + (p.imageable_h - (self.rows * self.cell_h + (self.rows - 1) * self.vgutter)) / 2
         start = page * self.per_page
         out = []
-        for i, img in enumerate(self.images[start:start + self.per_page]):
+        for i, img in enumerate(self._items()[start:start + self.per_page]):
             r, c = divmod(i, self.cols)
             out.append((img, Rect(x0 + c * (self.cell_w + self.hgutter), y0 + r * (self.cell_h + self.vgutter),
                                   self.cell_w, self.cell_h)))
@@ -381,3 +384,24 @@ class Strip(Layout):
             x1, y1 = x + self.strip_w, y + self.strip_h
             out += [(x, y, x1, y), (x1, y, x1, y1), (x1, y1, x, y1), (x, y1, x, y)]
         return out
+
+
+@dataclass
+class Passport(FixedSize):
+    """Passport/ID prints the way a photo shop sells them: copies of each photo filling the sheet.
+
+    copies > 0 repeats every photo that many times. copies == 0 ("fill sheet") shares one sheet equally
+    between the photos, so a single photo fills the whole page. The same ImageItem appears in several slots.
+    """
+    copies: int = 0
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.copies < 0:
+            raise ValueError("copies must be >= 0")
+
+    def _items(self) -> list[ImageItem]:
+        if not self.images:
+            return []
+        n = self.copies or max(1, self.per_page // len(self.images))
+        return [img for img in self.images for _ in range(n)]
