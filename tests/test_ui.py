@@ -6,6 +6,7 @@ from PIL import Image
 
 pytest.importorskip("PySide6")
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
 from photosheet.core import preset
@@ -326,3 +327,41 @@ def test_page_drag_is_off_for_carousel_and_safe_when_empty(app, tmp_path):
     w.kind.setCurrentText("Carousel")
     _mouse(app, w, "press", QPointF(300, 300))
     assert w._press is None
+
+
+def test_page_navigation_sits_centred_below_the_preview(app, tmp_path):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QToolBar, QToolButton
+    w = _win_with_images(tmp_path, 6)       # 2 pages in the default 2x2 layout
+    w.resize(1100, 800)
+    w.show()
+    app.processEvents()
+    assert not w.findChildren(QToolBar)                      # nothing left in a top toolbar
+    prev, nxt = [next(b for b in w.findChildren(QToolButton) if b.accessibleName() == n)
+                 for n in ("Previous Page", "Next Page")]
+    g = lambda wd: wd.mapTo(w, QPoint(0, 0))
+    scroll_bottom = g(w.scroll).y() + w.scroll.height()
+    assert g(prev).y() >= scroll_bottom and g(nxt).y() >= scroll_bottom      # directly below the preview
+    mid = (g(prev).x() + g(nxt).x() + nxt.width()) / 2
+    assert abs(mid - (g(w.scroll).x() + w.scroll.width() / 2)) < 3            # horizontally centred on it
+    nxt.click()
+    assert w.page_no == 1 and w.page_label.text().strip() == "2 / 2"
+    prev.click()
+    assert w.page_no == 0
+
+
+def test_no_empty_strip_below_navigation_and_errors_still_show(app, tmp_path):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QToolButton
+    w = MainWindow()
+    w.resize(1100, 800)
+    w.show()
+    app.processEvents()
+    assert not w.statusBar().isVisible()
+    nxt = next(b for b in w.findChildren(QToolButton) if b.accessibleName() == "Next Page")
+    gap_below = w.height() - (nxt.mapTo(w, QPoint(0, 0)).y() + nxt.height())
+    assert gap_below <= 8                                   # buttons sit at the window's bottom edge
+    w._on_rendered(w._gen, RuntimeError("boom"))            # a render error must still be visible
+    assert w.statusBar().isVisible() and "boom" in w.statusBar().currentMessage()
+    w._on_rendered(w._gen, QImage())                        # next good render clears it again
+    assert not w.statusBar().isVisible()

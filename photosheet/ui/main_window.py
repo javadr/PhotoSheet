@@ -10,7 +10,7 @@ from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox,
-    QToolBar, QVBoxLayout, QWidget,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..core import preset
@@ -185,12 +185,17 @@ class MainWindow(QMainWindow):
         self._base, self._base_zoom, self._pending_zoom, self._dpr = None, 1.0, 1.0, 1.0
         self._fit_timer = QTimer(self, singleShot=True, interval=120)  # settles zoom/resize into one real render
         self._fit_timer.timeout.connect(self.refresh)
-        self.setCentralWidget(self.scroll)
+        central = QWidget()
+        self._central_layout = QVBoxLayout(central)
+        self._central_layout.setContentsMargins(0, 0, 0, 0)
+        self._central_layout.setSpacing(0)
+        self._central_layout.addWidget(self.scroll, 1)   # the page navigation row is added below it in _build_menu
+        self.setCentralWidget(central)
         self.setAcceptDrops(True)
         self._build_layout_dock()
         self._build_image_dock()
         self._build_menu()
-        self.statusBar()
+        self.statusBar().hide()   # only shown while there is an error to report, so it leaves no blank strip
         self.refresh()
 
     # ---- construction ----
@@ -211,18 +216,30 @@ class MainWindow(QMainWindow):
         act(m, "Print…", self.print_, "Ctrl+P")
         m.addSeparator()
         act(m, "Quit", self.close, "Ctrl+Q")
-        tb = QToolBar("Pages")
-        self.addToolBar(tb)
+        # Page navigation: a row centred directly under the page preview.
+        nav = QWidget()
+        row = QHBoxLayout(nav)
+        row.setContentsMargins(0, 4, 0, 4)
+        row.addStretch()
         # Glyph-only buttons need a real name for screen readers and Voice Control.
         for text, glyph, step, key in (("Previous Page", "◀", -1, "PgUp"), ("Next Page", "▶", 1, "PgDown")):
-            a = act(tb, text, lambda _=False, d=step: self.goto(self.page_no + d), key)
+            a = QAction(text, self)
+            a.triggered.connect(lambda _=False, d=step: self.goto(self.page_no + d))
+            a.setShortcut(key)
             a.setIconText(glyph)
             a.setToolTip(f"{text} ({key})")
-            tb.widgetForAction(a).setAccessibleName(text)
+            self.addAction(a)   # keeps the shortcut working anywhere in the window
+            btn = QToolButton()
+            btn.setDefaultAction(a)
+            btn.setAccessibleName(text)
+            btn.setAutoRaise(True)
+            row.addWidget(btn)
             if step < 0:
                 self.page_label = QLabel(" 1 / 1 ")
                 self.page_label.setAccessibleName("Current page")
-                tb.addWidget(self.page_label)
+                row.addWidget(self.page_label)
+        row.addStretch()
+        self._central_layout.addWidget(nav)
         e = self.menuBar().addMenu("&Edit")
         self.undo_act = self.undo_stack.createUndoAction(self, "Undo")
         self.undo_act.setShortcut(QKeySequence.StandardKey.Undo)
@@ -689,9 +706,11 @@ class MainWindow(QMainWindow):
         if gen != self._gen:
             return  # a newer render is on its way
         if isinstance(res, Exception):
+            self.statusBar().show()
             self.statusBar().showMessage(f"Render failed: {res}")
         else:
             self.statusBar().clearMessage()
+            self.statusBar().hide()
             self._base, self._base_zoom = res, self._pending_zoom
             self.preview.setPixmap(self._paper(res, self._dpr))
 
