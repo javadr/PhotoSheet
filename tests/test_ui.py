@@ -147,3 +147,27 @@ def test_empty_page_shows_hint_pixels(app):
     px = w._paper(blank, 1.0).toImage()
     dark = sum(1 for x in range(0, 300, 2) for y in range(100, 200, 2) if px.pixelColor(x + 14, y + 14).value() < 200)
     assert dark > 20   # the prompt text was drawn on the page
+
+
+def test_mouse_wheel_zooms(app):
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    w = MainWindow()
+    w.resize(1000, 700)
+    w.show()
+    app.processEvents()
+    fit = w._fit_zoom()
+
+    def wheel(dy, mod=Qt.KeyboardModifier.ControlModifier):
+        e = QWheelEvent(QPointF(50, 50), QPointF(50, 50), QPoint(), QPoint(0, dy),
+                        Qt.MouseButton.NoButton, mod,
+                        Qt.ScrollPhase.NoScrollPhase, False)
+        app.sendEvent(w.scroll.viewport(), e)
+    wheel(120)
+    assert abs(w.zoom - fit * 1.25) < 1e-6
+    wheel(-120)
+    wheel(-120)
+    assert abs(w.zoom - fit / 1.25) < 1e-6
+    w.set_zoom(1.0)
+    wheel(120, Qt.KeyboardModifier.NoModifier)   # plain wheel must not zoom
+    assert w.zoom == 1.0

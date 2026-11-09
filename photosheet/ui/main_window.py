@@ -455,8 +455,14 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def eventFilter(self, obj, ev):
-        if obj is self.scroll.viewport() and ev.type() == QEvent.Type.Resize and self.zoom is None:
-            self._fit_timer.start()  # debounce: re-fit once resizing settles
+        if obj is self.scroll.viewport():
+            if (ev.type() == QEvent.Type.Wheel and ev.angleDelta().y()
+                    and ev.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                # Ctrl+wheel = zoom (one notch = 120 units = 1.25x); plain wheel scrolls
+                self.set_zoom((self.zoom or self._fit_zoom()) * 1.25 ** (ev.angleDelta().y() / 120))
+                return True
+            if ev.type() == QEvent.Type.Resize and self.zoom is None:
+                self._fit_timer.start()  # debounce: re-fit once resizing settles
         return super().eventFilter(obj, ev)
 
     def _paper(self, img: QImage, dpr: float) -> QPixmap:
