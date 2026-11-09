@@ -81,6 +81,14 @@ class _ImageList(QListWidget):
             super().dropEvent(e)
 
 
+def desk_color(window: QColor) -> QColor:
+    """Backdrop behind the paper: a step away from the window colour so the white page's edge shows.
+
+    Derived from the Window colour because themes can't be trusted: this desktop sets palette Mid to pure white.
+    """
+    return window.darker(122) if window.lightness() > 128 else window.lighter(170)
+
+
 def to_qimage(im: Image.Image) -> QImage:
     im = im.convert("RGB")
     return QImage(im.tobytes(), im.width, im.height, 3 * im.width, QImage.Format.Format_RGB888).copy()
@@ -186,7 +194,8 @@ class MainWindow(QMainWindow):
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.preview)
         self.scroll.setWidgetResizable(True)
-        self.scroll.setBackgroundRole(QPalette.ColorRole.Mid)  # a "desk" so the white paper's edge shows
+        self.scroll.viewport().setAutoFillBackground(True)
+        self._apply_desk()
         self.scroll.viewport().installEventFilter(self)
         self._base, self._base_zoom, self._pending_zoom, self._dpr = None, 1.0, 1.0, 1.0
         self._fit_timer = QTimer(self, singleShot=True, interval=120)  # settles zoom/resize into one real render
@@ -612,6 +621,17 @@ class MainWindow(QMainWindow):
     def goto(self, n):
         self.page_no = max(0, min(n, self.layout_.pages - 1))
         self.refresh()
+
+    def _apply_desk(self):
+        vp = self.scroll.viewport()
+        pal = vp.palette()
+        pal.setColor(vp.backgroundRole(), desk_color(self.palette().color(QPalette.ColorRole.Window)))
+        vp.setPalette(pal)
+
+    def changeEvent(self, ev):
+        if ev.type() == QEvent.Type.PaletteChange:   # light/dark switch while the app is open
+            self._apply_desk()
+        super().changeEvent(ev)
 
     def _fit_zoom(self) -> float:
         vp, p = self.scroll.viewport().size(), self.layout_.page

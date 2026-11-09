@@ -552,3 +552,16 @@ def test_manual_segment_count_is_kept_until_the_photos_change(app, tmp_path):
     assert w.layout_.segments == 8 and len(w.layout_.wedges()) == 3
     w.overlap.setValue(10)                                           # unrelated change must not reset it
     assert w.layout_.segments == 8
+
+
+def test_desk_contrasts_with_the_white_page_on_light_and_dark_themes_and_ignores_palette_mid(app):
+    from PySide6.QtGui import QColor, QPalette
+    from photosheet.ui.main_window import desk_color
+    for window in ("#faf9f8", "#ffffff", "#eeeeee", "#2b2b2b", "#1e1e1e"):
+        d, w = desk_color(QColor(window)), QColor(window)
+        assert d != w and abs(d.lightness() - w.lightness()) >= 15, window   # clearly set apart from the window
+        assert abs(d.lightness() - 255) >= 15, window                          # and from the white page
+    win = MainWindow()
+    vp = win.scroll.viewport()
+    assert vp.autoFillBackground()
+    assert vp.palette().color(vp.backgroundRole()) == desk_color(win.palette().color(QPalette.ColorRole.Window))
