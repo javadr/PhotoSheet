@@ -1,9 +1,11 @@
 """Main window: layout controls, image list with per-image effects, live preview, export, print."""
 from __future__ import annotations
 
+import copy
+
 from PIL import Image
 from PySide6.QtCore import QEvent, QObject, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPageSize, QPainter, QPalette, QPixmap
+from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPageSize, QPainter, QPalette, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
@@ -46,6 +48,30 @@ def to_qimage(im: Image.Image) -> QImage:
     return QImage(im.tobytes(), im.width, im.height, 3 * im.width, QImage.Format.Format_RGB888).copy()
 
 
+class _Edit(QUndoCommand):
+    """Undoable change to the image list. State is deep-copied so effect tweaks undo too."""
+
+    def __init__(self, win, text, before, after, merge=False):
+        super().__init__(text)
+        self.win, self.before, self.after, self.merge, self._applied = win, before, after, merge, True
+
+    def id(self):
+        return 1 if self.merge else -1  # consecutive tweaks of one control collapse into one undo step
+
+    def mergeWith(self, other):
+        self.after = other.after
+        return True
+
+    def redo(self):
+        if self._applied:  # the first redo happens when pushed; the change is already made
+            self._applied = False
+            return
+        self.win._set_images(self.after)
+
+    def undo(self):
+        self.win._set_images(self.before)
+
+
 class _Signals(QObject):
     done = Signal(int, object)   # generation, QImage or Exception
 
@@ -79,6 +105,7 @@ class MainWindow(QMainWindow):
         self.sig = _Signals()
         self.sig.done.connect(self._on_rendered)
         self.pool = QThreadPool.globalInstance()
+        self.undo_stack = QUndoStack(self)
 
         self.preview = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.preview.setAccessibleName("Page preview")
@@ -91,9 +118,9 @@ class MainWindow(QMainWindow):
         self._fit_timer = QTimer(self, singleShot=True, interval=150)
         self._fit_timer.timeout.connect(self.refresh)
         self.setCentralWidget(self.scroll)
-        self._build_menu()
         self._build_layout_dock()
         self._build_image_dock()
+        self._build_menu()
         self.statusBar()
         self.refresh()
 
@@ -127,7 +154,21 @@ class MainWindow(QMainWindow):
                 self.page_label = QLabel(" 1 / 1 ")
                 self.page_label.setAccessibleName("Current page")
                 tb.addWidget(self.page_label)
+        e = self.menuBar().addMenu("&Edit")
+        self.undo_act = self.undo_stack.createUndoAction(self, "Undo")
+        self.undo_act.setShortcut(QKeySequence.StandardKey.Undo)
+        self.redo_act = self.undo_stack.createRedoAction(self, "Redo")
+        self.redo_act.setShortcut(QKeySequence.StandardKey.Redo)
+        e.addActions([self.undo_act, self.redo_act])
+        e.addSeparator()
+        self.remove_act = act(e, "Remove Image", self.remove_selected, QKeySequence.StandardKey.Delete)
+        # Delete only fires while the list has focus, so it can't eat a keystroke in a spin box.
+        self.remove_act.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+        self.list.addAction(self.remove_act)
         v = self.menuBar().addMenu("&View")
+        v.addAction(self.layout_dock.toggleViewAction())
+        v.addAction(self.image_dock.toggleViewAction())
+        v.addSeparator()
         act(v, "Fit to Window", lambda: self.set_zoom(None), "Ctrl+0")
         act(v, "Actual Size", lambda: self.set_zoom(1.0), "Ctrl+1")
         act(v, "Zoom In", lambda: self.set_zoom((self.zoom or self._fit_zoom()) * 1.25), QKeySequence.StandardKey.ZoomIn)
@@ -135,6 +176,9 @@ class MainWindow(QMainWindow):
         v.addSeparator()
         act(v, "Larger Text", lambda: change_text_size(+1))
         act(v, "Smaller Text", lambda: change_text_size(-1))
+        h = self.menuBar().addMenu("&Help")
+        act(h, "About PhotoSheet", lambda: QMessageBox.about(
+            self, "About PhotoSheet", "PhotoSheet\nPrint many photos per sheet, with ICC colour management."))
 
     def _build_layout_dock(self):
         self.kind = QComboBox()
@@ -164,9 +208,9 @@ class MainWindow(QMainWindow):
             w_changed.connect(self._layout_changed)
         box = QWidget()
         box.setLayout(form)
-        dock = QDockWidget("Layout", self)
-        dock.setWidget(box)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock)
+        self.layout_dock = QDockWidget("Layout", self)
+        self.layout_dock.setWidget(box)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.layout_dock)
         self._show_kind_rows()
 
     def _build_image_dock(self):
@@ -196,9 +240,9 @@ class MainWindow(QMainWindow):
         lay.addLayout(form)
         box = QWidget()
         box.setLayout(lay)
-        dock = QDockWidget("Images", self)
-        dock.setWidget(box)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        self.image_dock = QDockWidget("Images", self)
+        self.image_dock.setWidget(box)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.image_dock)
 
     @staticmethod
     def _spin(lo, hi, val):
@@ -267,18 +311,39 @@ class MainWindow(QMainWindow):
         for it in self.layout_.images:
             self.list.addItem(it.path.rsplit("/", 1)[-1])
 
+    def _edit(self, text, change, merge=False):
+        """Run change() on the image list and record it for undo."""
+        before = copy.deepcopy(self.layout_.images)
+        change()
+        self.undo_stack.push(_Edit(self, text, before, copy.deepcopy(self.layout_.images), merge))
+
+    def _set_images(self, images):
+        row = self.list.currentRow()
+        self.layout_.images[:] = copy.deepcopy(images)
+        self._fill_list()
+        self.list.setCurrentRow(min(row, self.list.count() - 1))
+        self._load_effects()
+        self.refresh()
+
     def add_images(self):
         files, _ = QFileDialog.getOpenFileNames(self, "Add images", "", IMG_FILTER)
-        for f in files:
-            self.layout_.add(ImageItem(f, crop=self.crop.isChecked()))
+        if files:
+            self._add_files(files)
+
+    def _add_files(self, files):
+        def change():
+            for f in files:
+                self.layout_.add(ImageItem(f, crop=self.crop.isChecked()))
+        self._edit("Add Images", change)
         self._fill_list()
         self.refresh()
 
     def remove_selected(self):
         r = self.list.currentRow()
         if r >= 0:
-            del self.layout_.images[r]
+            self._edit("Remove Image", lambda: self.layout_.images.pop(r))
             self._fill_list()
+            self.list.setCurrentRow(min(r, self.list.count() - 1))
             self.refresh()
 
     def _reordered(self, *_):
@@ -288,7 +353,7 @@ class MainWindow(QMainWindow):
         for n in names:  # match by filename; duplicates keep relative order
             ordered.append(next(p for p in pool if p.path.rsplit("/", 1)[-1] == n))
             pool.remove(ordered[-1])
-        self.layout_.images[:] = ordered
+        self._edit("Reorder Images", lambda: self.layout_.images.__setitem__(slice(None), ordered))
         self.refresh()
 
     def _selected(self):
@@ -320,7 +385,9 @@ class MainWindow(QMainWindow):
             fx.append(("UnsharpMask", {"radius": 3.0, "amount": self.sharp.value()}))
         if self.gray.isChecked():
             fx.append(("Desaturate", {}))
-        it.effects, it.flip_h, it.flip_v = fx, self.fliph.isChecked(), self.flipv.isChecked()
+        def change():
+            it.effects, it.flip_h, it.flip_v = fx, self.fliph.isChecked(), self.flipv.isChecked()
+        self._edit("Adjust Image", change, merge=True)
         self.refresh()
 
     # ---- preview ----

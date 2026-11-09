@@ -5,6 +5,7 @@ import pytest
 from PIL import Image
 
 pytest.importorskip("PySide6")
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from photosheet.core import preset
@@ -64,3 +65,46 @@ def test_fit_zoom_fits_viewport_and_actual_size_is_96dpi(app):
     assert w.zoom == 4.0
     w.set_zoom(None)
     assert w.zoom is None
+
+
+def _win_with_images(tmp_path, n=3):
+    w = MainWindow()
+    for i in range(n):
+        p = tmp_path / f"{i}.png"
+        Image.new("RGB", (40, 30), (i * 80, 0, 0)).save(p)
+    w._add_files([str(tmp_path / f"{i}.png") for i in range(n)])
+    return w
+
+
+def test_remove_undo_redo_and_menu_labels(app, tmp_path):
+    w = _win_with_images(tmp_path)
+    assert len(w.layout_.images) == 3
+    w.list.setCurrentRow(1)
+    w.remove_selected()
+    assert [i.path[-5:] for i in w.layout_.images] == ["0.png", "2.png"]
+    assert w.undo_act.text() == "Undo Remove Image"
+    w.undo_stack.undo()
+    assert len(w.layout_.images) == 3 and w.list.count() == 3
+    w.undo_stack.redo()
+    assert len(w.layout_.images) == 2
+
+
+def test_effect_tweaks_merge_into_one_undo_step_and_undo(app, tmp_path):
+    w = _win_with_images(tmp_path, 1)
+    w.list.setCurrentRow(0)
+    for v in (1.2, 1.4, 1.6):
+        w.gamma.setValue(v)
+    assert w.layout_.images[0].effects == [("Gamma", {"gamma": 1.6})]
+    w.undo_stack.undo()   # one step reverts the whole slider drag
+    assert w.layout_.images[0].effects == []
+
+
+def test_menus_and_panel_toggles(app):
+    w = MainWindow()
+    titles = [a.text().replace("&", "") for a in w.menuBar().actions()]
+    assert titles == ["File", "Edit", "View", "Help"]
+    assert w.remove_act.shortcutContext() == Qt.ShortcutContext.WidgetShortcut
+    w.layout_dock.close()
+    assert not w.layout_dock.isVisibleTo(w)
+    w.layout_dock.toggleViewAction().trigger()
+    assert w.layout_dock.isVisibleTo(w)
