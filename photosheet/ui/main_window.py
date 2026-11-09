@@ -448,8 +448,19 @@ class MainWindow(QMainWindow):
         for it in old.images:
             it.crop = self.crop.isChecked()
             self.layout_.add(it)
+        if cls is Carousel and not isinstance(old, Carousel):
+            self._sync_segments()   # entering Carousel: one wedge per photo
         self._update_per_sheet()
         self.refresh()
+
+    def _sync_segments(self):
+        """A Carousel divides its circle between the photos it has: follow the count on add, remove and undo."""
+        if isinstance(self.layout_, Carousel):
+            n = max(1, len(self.layout_.images))
+            self.layout_.segments = n
+            self.segments.blockSignals(True)
+            self.segments.setValue(n)
+            self.segments.blockSignals(False)
 
     def _update_per_sheet(self):
         lay = self.layout_
@@ -521,6 +532,7 @@ class MainWindow(QMainWindow):
     def _set_images(self, images):
         row = self.list.currentRow()
         self.layout_.images[:] = copy.deepcopy(images)
+        self._sync_segments()
         self._fill_list()
         self.list.setCurrentRow(min(row, self.list.count() - 1))
         self._load_effects()
@@ -536,6 +548,7 @@ class MainWindow(QMainWindow):
             for f in files:
                 self.layout_.add(ImageItem(f, crop=self.crop.isChecked()))
         self._edit("Add Images", change)
+        self._sync_segments()
         self._fill_list()
         self.refresh()
 
@@ -543,6 +556,7 @@ class MainWindow(QMainWindow):
         r = self.list.currentRow()
         if r >= 0:
             self._edit("Remove Image", lambda: self.layout_.images.pop(r))
+            self._sync_segments()
             self._fill_list()
             self.list.setCurrentRow(min(r, self.list.count() - 1))
             self.refresh()

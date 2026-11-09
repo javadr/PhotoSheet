@@ -521,3 +521,34 @@ def test_carousel_drag_swaps_wedges_and_pans_the_photo(app, tmp_path):
     assert w._pan is not None and (item.hpan, item.vpan) != before
     _mouse(app, w, "release", s + QPointF(-60, -60))
     assert w.undo_act.text() == "Undo Reposition Photo"
+
+
+def test_carousel_follows_the_number_of_photos_on_add_remove_and_undo(app, tmp_path):
+    from photosheet.core.geometry import segment_angles
+    w = _win_with_images(tmp_path, 4)
+    w.kind.setCurrentText("Carousel")
+    assert (w.layout_.segments, w.segments.value()) == (4, 4)       # entering Carousel: one wedge per photo
+    w.list.setCurrentRow(1)
+    w.remove_selected()
+    assert (w.layout_.segments, w.segments.value(), len(w.layout_.wedges())) == (3, 3, 3)
+    spans = [b - a for a, b in segment_angles(w.layout_.segments, w.layout_.angle_offset)]
+    assert spans == [120, 120, 120]                                  # the circle was re-divided, no gap left
+    w.undo_stack.undo()                                              # undo the removal: the wedge comes back
+    assert (w.layout_.segments, w.segments.value(), len(w.layout_.wedges())) == (4, 4, 4)
+    w.undo_stack.redo()
+    assert w.layout_.segments == 3
+    while w.layout_.images:                                          # remove everything: never fewer than 1 segment
+        w.list.setCurrentRow(0)
+        w.remove_selected()
+    assert w.layout_.segments == 1 and w.segments.value() == 1
+    w._add_files([str(tmp_path / f"{i}.png") for i in range(3)] * 2)   # adding keeps the box in step with the layout
+    assert (w.layout_.segments, w.segments.value()) == (6, 6)
+
+
+def test_manual_segment_count_is_kept_until_the_photos_change(app, tmp_path):
+    w = _win_with_images(tmp_path, 3)
+    w.kind.setCurrentText("Carousel")
+    w.segments.setValue(8)                                           # deliberate: 3 photos, 8 wedges
+    assert w.layout_.segments == 8 and len(w.layout_.wedges()) == 3
+    w.overlap.setValue(10)                                           # unrelated change must not reset it
+    assert w.layout_.segments == 8
