@@ -34,3 +34,15 @@ def test_window_switches_layouts_keeps_images_and_renders(app, tmp_path, qtbot=N
     w.layout_ = preset.load(f)
     w._sync_controls()
     assert w.kind.currentText() == "Carousel" and w.list.count() == 1
+
+
+def test_page_buttons_are_named_and_text_never_below_minimum(app):
+    from photosheet.ui.main_window import change_text_size
+    w = MainWindow()
+    from PySide6.QtWidgets import QToolButton
+    names = {b.accessibleName() for b in w.findChildren(QToolButton)}
+    assert {"Previous Page", "Next Page"} <= names
+    change_text_size(-50, persist=False)
+    assert app.font().pointSizeF() >= 10.0
+    change_text_size(+50, persist=False)
+    assert app.font().pointSizeF() <= 24.0

@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from PIL import Image
-from PySide6.QtCore import QObject, QRunnable, QSizeF, Qt, QThreadPool, Signal
+from PySide6.QtCore import QObject, QRunnable, QSettings, QSizeF, Qt, QThreadPool, Signal
 from PySide6.QtGui import QAction, QImage, QPageSize, QPainter, QPixmap
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox,
     QToolBar, QVBoxLayout, QWidget,
 )
@@ -19,6 +19,26 @@ from ..core.render import render_page
 PAGES = {"A4": (595, 842), "Letter": (612, 792)}
 KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel}
 IMG_FILTER = "Images (*.jpg *.jpeg *.png *.tif *.tiff *.bmp *.webp);;All files (*)"
+
+
+MIN_FONT_PT, MAX_FONT_PT = 10.0, 24.0  # HIG: macOS minimum text size is 10 pt
+
+
+def restore_text_size() -> None:
+    """Apply the saved text size, never below the platform minimum."""
+    app = QApplication.instance()
+    f = app.font()
+    f.setPointSizeF(max(MIN_FONT_PT, float(QSettings("PhotoSheet", "PhotoSheet").value("fontPt", f.pointSizeF()))))
+    app.setFont(f)
+
+
+def change_text_size(delta: float, persist: bool = True) -> None:
+    app = QApplication.instance()
+    f = app.font()
+    f.setPointSizeF(max(MIN_FONT_PT, min(MAX_FONT_PT, f.pointSizeF() + delta)))
+    app.setFont(f)
+    if persist:
+        QSettings("PhotoSheet", "PhotoSheet").setValue("fontPt", f.pointSizeF())
 
 
 def to_qimage(im: Image.Image) -> QImage:
@@ -60,6 +80,7 @@ class MainWindow(QMainWindow):
         self.pool = QThreadPool.globalInstance()
 
         self.preview = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        self.preview.setAccessibleName("Page preview")
         scroll = QScrollArea()
         scroll.setWidget(self.preview)
         scroll.setWidgetResizable(True)
@@ -78,6 +99,7 @@ class MainWindow(QMainWindow):
             if key:
                 a.setShortcut(key)
             menu.addAction(a)
+            return a
         m = self.menuBar().addMenu("&File")
         act(m, "Add images…", self.add_images, "Ctrl+O")
         act(m, "Open preset…", self.open_preset)
@@ -89,10 +111,19 @@ class MainWindow(QMainWindow):
         act(m, "Quit", self.close, "Ctrl+Q")
         tb = QToolBar("Pages")
         self.addToolBar(tb)
-        act(tb, "◀", lambda: self.goto(self.page_no - 1), "PgUp")
-        self.page_label = QLabel(" 1 / 1 ")
-        tb.addWidget(self.page_label)
-        act(tb, "▶", lambda: self.goto(self.page_no + 1), "PgDown")
+        # Glyph-only buttons need a real name for screen readers and Voice Control.
+        for text, glyph, step, key in (("Previous Page", "◀", -1, "PgUp"), ("Next Page", "▶", 1, "PgDown")):
+            a = act(tb, text, lambda _=False, d=step: self.goto(self.page_no + d), key)
+            a.setIconText(glyph)
+            a.setToolTip(f"{text} ({key})")
+            tb.widgetForAction(a).setAccessibleName(text)
+            if step < 0:
+                self.page_label = QLabel(" 1 / 1 ")
+                self.page_label.setAccessibleName("Current page")
+                tb.addWidget(self.page_label)
+        v = self.menuBar().addMenu("&View")
+        act(v, "Larger Text", lambda: change_text_size(+1))
+        act(v, "Smaller Text", lambda: change_text_size(-1))
 
     def _build_layout_dock(self):
         self.kind = QComboBox()
