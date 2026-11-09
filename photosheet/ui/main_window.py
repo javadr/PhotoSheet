@@ -5,7 +5,7 @@ import copy
 
 from PIL import Image
 from PySide6.QtCore import QEvent, QObject, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPageSize, QPainter, QPalette, QPixmap, QUndoCommand, QUndoStack
+from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPageSize, QPainter, QPalette, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
@@ -41,6 +41,36 @@ def change_text_size(delta: float, persist: bool = True) -> None:
     app.setFont(f)
     if persist:
         QSettings("PhotoSheet", "PhotoSheet").setValue("fontPt", f.pointSizeF())
+
+
+IMG_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
+
+
+def dropped_images(mime) -> list[str]:
+    """Local image files in a drag, in order. Anything else is ignored."""
+    if not mime.hasUrls():
+        return []
+    return [u.toLocalFile() for u in mime.urls()
+            if u.isLocalFile() and u.toLocalFile().lower().endswith(tuple(IMG_SUFFIXES))]
+
+
+class _ImageList(QListWidget):
+    """List that reorders internally but also takes image files dragged in from a file manager."""
+    files_dropped = Signal(list)
+
+    def dragEnterEvent(self, e):
+        e.acceptProposedAction() if dropped_images(e.mimeData()) else super().dragEnterEvent(e)
+
+    def dragMoveEvent(self, e):
+        e.acceptProposedAction() if dropped_images(e.mimeData()) else super().dragMoveEvent(e)
+
+    def dropEvent(self, e):
+        files = dropped_images(e.mimeData())
+        if files:
+            e.acceptProposedAction()
+            self.files_dropped.emit(files)
+        else:
+            super().dropEvent(e)
 
 
 def to_qimage(im: Image.Image) -> QImage:
@@ -118,6 +148,7 @@ class MainWindow(QMainWindow):
         self._fit_timer = QTimer(self, singleShot=True, interval=150)
         self._fit_timer.timeout.connect(self.refresh)
         self.setCentralWidget(self.scroll)
+        self.setAcceptDrops(True)
         self._build_layout_dock()
         self._build_image_dock()
         self._build_menu()
@@ -191,7 +222,7 @@ class MainWindow(QMainWindow):
         self.segments, self.overlap = self._spin(1, 64, 4), self._spin(0, 180, 30)
         self.angle, self.inner = self._spin(-360, 360, 0), self._spin(0, 400, 0)
         self.poster_w, self.poster_h = self._spin(1, 400, 16), self._spin(1, 400, 12)
-        self.crop = QCheckBox("Crop to fill")
+        self.crop = QCheckBox("Crop all images to fill")
         form = QFormLayout()
         self.rowsof = {}
         for key, label, w in [
@@ -214,7 +245,8 @@ class MainWindow(QMainWindow):
         self._show_kind_rows()
 
     def _build_image_dock(self):
-        self.list = QListWidget()
+        self.list = _ImageList()
+        self.list.files_dropped.connect(self._add_files)
         self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.list.model().rowsMoved.connect(self._reordered)
         self.list.currentRowChanged.connect(self._load_effects)
@@ -226,6 +258,8 @@ class MainWindow(QMainWindow):
         self.sharp = QDoubleSpinBox(minimum=0, maximum=5, singleStep=0.1, value=0)
         self.gray = QCheckBox("Desaturate")
         self.fliph, self.flipv = QCheckBox("Flip horizontal"), QCheckBox("Flip vertical")
+        self.fx_hint = QLabel("Select an image to adjust it.")
+        self.fx_widgets = [self.gamma, self.temp, self.sharp, self.gray, self.fliph, self.flipv]
         form = QFormLayout()
         for label, w in [("Gamma", self.gamma), ("Warm/Cool", self.temp), ("Sharpen", self.sharp),
                          ("", self.gray), ("", self.fliph), ("", self.flipv)]:
@@ -237,12 +271,14 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout()
         lay.addWidget(self.list)
         lay.addLayout(row)
+        lay.addWidget(self.fx_hint)
         lay.addLayout(form)
         box = QWidget()
         box.setLayout(lay)
         self.image_dock = QDockWidget("Images", self)
         self.image_dock.setWidget(box)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.image_dock)
+        self._load_effects()
 
     @staticmethod
     def _spin(lo, hi, val):
@@ -304,6 +340,16 @@ class MainWindow(QMainWindow):
         self._loading = False
         self._show_kind_rows()
         self._fill_list()
+
+    def dragEnterEvent(self, e):
+        if dropped_images(e.mimeData()):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        files = dropped_images(e.mimeData())
+        if files:
+            e.acceptProposedAction()
+            self._add_files(files)
 
     # ---- images ----
     def _fill_list(self):
@@ -370,6 +416,9 @@ class MainWindow(QMainWindow):
         self.gray.setChecked("Desaturate" in fx)
         self.fliph.setChecked(bool(it and it.flip_h))
         self.flipv.setChecked(bool(it and it.flip_v))
+        for w in self.fx_widgets:
+            w.setEnabled(it is not None)
+        self.fx_hint.setVisible(it is None)
         self._loading = False
 
     def _effects_changed(self, *_):
@@ -420,6 +469,13 @@ class MainWindow(QMainWindow):
             qp.fillRect(pad - i + round(2 * dpr), pad - i + round(3 * dpr), img.width() + 2 * i,
                         img.height() + 2 * i, QColor(0, 0, 0, 9))
         qp.drawImage(pad, pad, img)
+        if not self.layout_.images:
+            f = QFont(QApplication.font())
+            f.setPixelSize(round(16 * dpr))
+            qp.setFont(f)
+            qp.setPen(QColor(0, 0, 0, 130))
+            qp.drawText(pad, pad, img.width(), img.height(), Qt.AlignmentFlag.AlignCenter,
+                        "Drop photos here\nor choose File ▸ Add Images…")
         qp.setPen(QColor(0, 0, 0, 70))
         qp.drawRect(pad - 1, pad - 1, img.width() + 1, img.height() + 1)
         qp.end()

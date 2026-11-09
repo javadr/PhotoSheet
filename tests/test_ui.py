@@ -43,10 +43,14 @@ def test_page_buttons_are_named_and_text_never_below_minimum(app):
     from PySide6.QtWidgets import QToolButton
     names = {b.accessibleName() for b in w.findChildren(QToolButton)}
     assert {"Previous Page", "Next Page"} <= names
-    change_text_size(-50, persist=False)
-    assert app.font().pointSizeF() >= 10.0
-    change_text_size(+50, persist=False)
-    assert app.font().pointSizeF() <= 24.0
+    original = app.font()
+    try:
+        change_text_size(-50, persist=False)
+        assert app.font().pointSizeF() >= 10.0
+        change_text_size(+50, persist=False)
+        assert app.font().pointSizeF() <= 24.0
+    finally:
+        app.setFont(original)  # don't leak a 24 pt font into the other tests
 
 
 def test_fit_zoom_fits_viewport_and_actual_size_is_96dpi(app):
@@ -108,3 +112,38 @@ def test_menus_and_panel_toggles(app):
     assert not w.layout_dock.isVisibleTo(w)
     w.layout_dock.toggleViewAction().trigger()
     assert w.layout_dock.isVisibleTo(w)
+
+
+def test_effect_controls_disabled_until_an_image_is_selected(app, tmp_path):
+    w = MainWindow()
+    w.show()
+    assert not any(c.isEnabled() for c in w.fx_widgets) and w.fx_hint.isVisible()
+    w = _win_with_images(tmp_path, 1)
+    w.show()
+    w.list.setCurrentRow(0)
+    assert all(c.isEnabled() for c in w.fx_widgets) and not w.fx_hint.isVisible()
+
+
+def test_dropped_files_filtered_and_added(app, tmp_path):
+    from PySide6.QtCore import QMimeData, QUrl
+    img = tmp_path / "a.png"
+    Image.new("RGB", (10, 10)).save(img)
+    (tmp_path / "notes.txt").write_text("x")
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(img)), QUrl.fromLocalFile(str(tmp_path / "notes.txt")),
+                  QUrl("https://example.com/x.png")])
+    from photosheet.ui.main_window import dropped_images
+    assert dropped_images(mime) == [str(img)]
+    w = MainWindow()
+    w._add_files(dropped_images(mime))
+    assert len(w.layout_.images) == 1 and w.undo_act.text() == "Undo Add Images"
+
+
+def test_empty_page_shows_hint_pixels(app):
+    w = MainWindow()
+    from PySide6.QtGui import QImage
+    blank = QImage(300, 300, QImage.Format.Format_RGB888)
+    blank.fill(0xFFFFFF)
+    px = w._paper(blank, 1.0).toImage()
+    dark = sum(1 for x in range(0, 300, 2) for y in range(100, 200, 2) if px.pixelColor(x + 14, y + 14).value() < 200)
+    assert dark > 20   # the prompt text was drawn on the page
