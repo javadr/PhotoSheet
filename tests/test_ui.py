@@ -171,3 +171,23 @@ def test_mouse_wheel_zooms(app):
     w.set_zoom(1.0)
     wheel(120, Qt.KeyboardModifier.NoModifier)   # plain wheel must not zoom
     assert w.zoom == 1.0
+
+
+def test_zoom_is_instant_and_renders_are_coalesced(app, tmp_path):
+    import time
+    w = _win_with_images(tmp_path, 1)
+    w.resize(1000, 700)
+    w.show()
+    deadline = time.time() + 5
+    while w._base is None and time.time() < deadline:
+        app.processEvents()
+    assert w._base is not None
+    before = w.preview.pixmap().width()
+    gen = w._gen
+    for _ in range(5):
+        w.set_zoom((w.zoom or w._fit_zoom()) * 1.25)
+    assert w.preview.pixmap().width() > before     # stretched immediately, no render yet
+    assert w._gen == gen                           # five zooms, zero renders started
+    time.sleep(0.2)
+    app.processEvents()
+    assert w._gen == gen + 1                       # one real render after input settled

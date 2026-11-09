@@ -107,13 +107,16 @@ class _Signals(QObject):
 
 
 class _Job(QRunnable):
-    def __init__(self, gen, layout, page, dpi, sig):
+    def __init__(self, gen, layout, page, dpi, sig, current):
         super().__init__()
         self.gen, self.layout, self.page, self.dpi, self.sig = gen, layout, page, dpi, sig
+        self.current = current
 
     def run(self):
+        if not self.current():
+            return  # superseded while queued: don't burn CPU on it
         try:
-            res = to_qimage(render_page(self.layout, self.page, self.dpi))
+            res = to_qimage(render_page(self.layout, self.page, self.dpi, fast=True))
         except Exception as e:  # shown in the status bar; never crash the worker
             res = e
         try:
@@ -145,7 +148,8 @@ class MainWindow(QMainWindow):
         self.scroll.setWidgetResizable(True)
         self.scroll.setBackgroundRole(QPalette.ColorRole.Mid)  # a "desk" so the white paper's edge shows
         self.scroll.viewport().installEventFilter(self)
-        self._fit_timer = QTimer(self, singleShot=True, interval=150)
+        self._base, self._base_zoom, self._pending_zoom, self._dpr = None, 1.0, 1.0, 1.0
+        self._fit_timer = QTimer(self, singleShot=True, interval=120)  # settles zoom/resize into one real render
         self._fit_timer.timeout.connect(self.refresh)
         self.setCentralWidget(self.scroll)
         self.setAcceptDrops(True)
@@ -452,7 +456,8 @@ class MainWindow(QMainWindow):
 
     def set_zoom(self, z):
         self.zoom = None if z is None else max(0.1, min(4.0, z))
-        self.refresh()
+        self._rescale_preview()      # instant: stretch the last render
+        self._fit_timer.start()      # sharp: one real render once input settles
 
     def eventFilter(self, obj, ev):
         if obj is self.scroll.viewport():
@@ -462,8 +467,19 @@ class MainWindow(QMainWindow):
                 self.set_zoom((self.zoom or self._fit_zoom()) * 1.25 ** (ev.angleDelta().y() / 120))
                 return True
             if ev.type() == QEvent.Type.Resize and self.zoom is None:
+                self._rescale_preview()
                 self._fit_timer.start()  # debounce: re-fit once resizing settles
         return super().eventFilter(obj, ev)
+
+    def _rescale_preview(self):
+        """Show the last rendered page stretched to the current zoom, without re-rendering."""
+        if self._base is None:
+            return
+        z = self.zoom if self.zoom is not None else self._fit_zoom()
+        r = z / self._base_zoom
+        img = self._base.scaled(max(1, round(self._base.width() * r)), max(1, round(self._base.height() * r)),
+                                Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self.preview.setPixmap(self._paper(img, self._dpr))
 
     def _paper(self, img: QImage, dpr: float) -> QPixmap:
         """The rendered page on a soft shadow with a hairline edge."""
@@ -494,8 +510,10 @@ class MainWindow(QMainWindow):
         self._gen += 1
         dpr = self.devicePixelRatioF()
         z = self.zoom if self.zoom is not None else self._fit_zoom()
-        self._dpr = dpr
-        self.pool.start(_Job(self._gen, self.layout_, self.page_no, self.SCREEN_DPI * z * dpr, self.sig))
+        self._dpr, self._pending_zoom = dpr, z
+        gen = self._gen
+        self.pool.start(_Job(gen, self.layout_, self.page_no, self.SCREEN_DPI * z * dpr, self.sig,
+                             lambda: gen == self._gen))
 
     def _on_rendered(self, gen, res):
         if gen != self._gen:
@@ -504,6 +522,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Render failed: {res}")
         else:
             self.statusBar().clearMessage()
+            self._base, self._base_zoom = res, self._pending_zoom
             self.preview.setPixmap(self._paper(res, self._dpr))
 
     # ---- files ----

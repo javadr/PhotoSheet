@@ -61,3 +61,31 @@ def test_carousel_renders_wedges_and_leaves_corners_blank(red):
     im = render_page(c, 0, dpi=72)
     assert im.getpixel((100, 40)) == (255, 0, 0)       # inside the disc
     assert im.getpixel((2, 2)) == (255, 255, 255)      # outside the circle
+
+
+def test_load_is_cached_and_invalidated_by_file_change_or_effect(red):
+    import os
+    from photosheet.core import render
+    item = ImageItem(red)
+    a = render.load(item)
+    assert render.load(item) is a                              # cache hit
+    assert render.load(ImageItem(red, effects=[("Gamma", {"gamma": 1.5})])) is not a
+    st = os.stat(red)
+    Image.new("RGB", (200, 100), (0, 255, 0)).save(red)
+    os.utime(red, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+    assert render.load(item).getpixel((0, 0)) == (0, 255, 0)   # edited file is reloaded
+
+
+def test_fast_preview_matches_full_quality_on_flat_colour(red):
+    n = NUp(page=PageExtent(100, 100), rows=1, cols=1)
+    n.add(ImageItem(red, rotation=0))
+    assert render_page(n, 0, 72, fast=True).getpixel((50, 50)) == render_page(n, 0, 72).getpixel((50, 50))
+
+
+def test_proxy_is_capped_and_full_load_untouched(tmp_path):
+    from photosheet.core import render
+    big = tmp_path / "big.png"
+    Image.new("RGB", (5000, 2500), (10, 20, 30)).save(big)
+    item = ImageItem(str(big))
+    assert max(render.load(item, proxy=True).size) == render.PROXY_SIDE
+    assert render.load(item).size == (5000, 2500)

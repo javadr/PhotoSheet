@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import io
+import os
+import threading
+from collections import OrderedDict
 
 from dataclasses import replace
 
@@ -20,7 +23,44 @@ def _srgb():
     return _SRGB
 
 
-def load(item: ImageItem, printer_profile: str | None = None) -> Image.Image:
+_CACHE: OrderedDict = OrderedDict()
+_CACHE_LOCK = threading.Lock()
+_CACHE_PIXELS = 100_000_000  # budget across cached images, roughly 300 MB of RGB
+
+
+PROXY_SIDE = 2400  # longest side of the cached preview copy
+
+
+def load(item: ImageItem, printer_profile: str | None = None, proxy: bool = False) -> Image.Image:
+    """Cached _load(). The returned image is shared: callers must not modify it in place.
+
+    proxy=True returns a copy capped at PROXY_SIDE for fast previews.
+    shortcut: a preview at more than ~PROXY_SIDE px per photo (huge zoom on a 1-up page)
+    is slightly soft; raise PROXY_SIDE or render without fast=True if that matters.
+    """
+    try:
+        mtime = os.stat(item.path).st_mtime_ns
+    except OSError:
+        mtime = 0  # _load raises the real error
+    key = (item.path, mtime, item.profile, item.intent, item.flip_h, item.flip_v,
+           repr(item.effects), printer_profile, proxy)
+    with _CACHE_LOCK:
+        if key in _CACHE:
+            _CACHE.move_to_end(key)
+            return _CACHE[key]
+    im = _load(item, printer_profile) if not proxy else load(item, printer_profile)
+    if proxy and max(im.size) > PROXY_SIDE:
+        im = im.copy()
+        im.thumbnail((PROXY_SIDE, PROXY_SIDE), Image.BICUBIC, reducing_gap=2.0)
+    if im.width * im.height <= _CACHE_PIXELS:
+        with _CACHE_LOCK:
+            _CACHE[key] = im
+            while len(_CACHE) > 1 and sum(i.width * i.height for i in _CACHE.values()) > _CACHE_PIXELS:
+                _CACHE.popitem(last=False)
+    return im
+
+
+def _load(item: ImageItem, printer_profile: str | None = None) -> Image.Image:
     """Open, orient, colour-manage to RGB, flip and apply effects."""
     im = Image.open(item.path)
     im = ImageOps.exif_transpose(im)
@@ -49,11 +89,14 @@ def load(item: ImageItem, printer_profile: str | None = None) -> Image.Image:
     return im
 
 
-def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s: float) -> None:
+def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s: float,
+           fast: bool = False) -> None:
     f = fit(im.width, im.height, slot.scaled(s), item.crop, Rotation(item.rotation), item.hpan, item.vpan)
     if f.rotation:
         im = im.rotate(-f.rotation, expand=True)  # PIL rotates counter-clockwise
-    im = im.resize((max(1, f.width), max(1, f.height)), Image.LANCZOS)
+    size = (max(1, f.width), max(1, f.height))
+    # fast (previews): box-reduce first, then bicubic. Final output keeps LANCZOS.
+    im = im.resize(size, Image.BICUBIC, reducing_gap=2.0) if fast else im.resize(size, Image.LANCZOS)
     if item.crop:
         w, h = min(f.width, round(slot.w * s)), min(f.height, round(slot.h * s))
         im = im.crop((f.xoffset, f.yoffset, f.xoffset + w, f.yoffset + h))
@@ -64,7 +107,7 @@ def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s:
 
 
 def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str | None = None,
-                background=(255, 255, 255)) -> Image.Image:
+                background=(255, 255, 255), fast: bool = False) -> Image.Image:
     s = dpi / 72
     p = layout.page
     canvas = Image.new("RGB", (round(p.width * s), round(p.height * s)), background)
@@ -74,7 +117,7 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         idx, _, win = layout.tile_window(page)
         item = layout.images[idx]
         poster = Image.new("RGB", (round(layout.poster_w * s), round(layout.poster_h * s)), background)
-        _place(poster, item, load(item, printer_profile), Rect(0, 0, layout.poster_w, layout.poster_h), s)
+        _place(poster, item, load(item, printer_profile, fast), Rect(0, 0, layout.poster_w, layout.poster_h), s, fast)
         tile = poster.crop((round(win.x * s), round(win.y * s),
                             round((win.x + win.w) * s), round((win.y + win.h) * s)))
         canvas.paste(tile, (round(p.left * s), round(p.top * s)))
@@ -84,13 +127,13 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         for i in [*range(0, len(wedges), 2), *range(1, len(wedges), 2)]:  # evens, then odds on top
             item, poly, box = wedges[i]
             tmp = Image.new("RGB", canvas.size, background)
-            _place(tmp, replace(item, crop=True, rotation=0, mask=None), load(item, printer_profile), box, s)
+            _place(tmp, replace(item, crop=True, rotation=0, mask=None), load(item, printer_profile, fast), box, s, fast)
             mask = Image.new("L", canvas.size, 0)
             ImageDraw.Draw(mask).polygon([(x * s, y * s) for x, y in poly], fill=255)
             canvas.paste(tmp, mask=mask)
         return canvas
     for item, slot in layout.slots(page):
-        _place(canvas, item, load(item, printer_profile), slot, s)
+        _place(canvas, item, load(item, printer_profile, fast), slot, s, fast)
     return canvas
 
 
