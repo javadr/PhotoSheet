@@ -24,10 +24,22 @@ class ImageItem:
     effects: list = field(default_factory=list)  # [(name, {params}), ...] in order
 
 
+def corner_ticks(r: Rect, length: float = 5.0, gap: float = 1.0) -> list[tuple[float, float, float, float]]:
+    """Eight short crop-mark segments (x0, y0, x1, y1) just outside a rectangle's corners."""
+    x0, y0, x1, y1 = r.x, r.y, r.x + r.w, r.y + r.h
+    out = []
+    for x, dx in ((x0, -1), (x1, 1)):
+        for y, dy in ((y0, -1), (y1, 1)):
+            out.append((x + dx * gap, y, x + dx * (gap + length), y))
+            out.append((x, y + dy * gap, x, y + dy * (gap + length)))
+    return out
+
+
 @dataclass
 class Layout:
     page: PageExtent = field(default_factory=PageExtent)
     images: list[ImageItem] = field(default_factory=list)
+    marks: bool = False   # draw crop marks at each photo's corners (layouts that support it)
 
     def add(self, item: ImageItem) -> None:
         self.images.append(item)
@@ -39,6 +51,14 @@ class Layout:
     def slots(self, page: int) -> list[tuple[ImageItem, Rect]]:
         raise NotImplementedError
 
+    def cut_guides(self, page: int) -> list[tuple[float, float, float, float]]:
+        """Line segments drawn under the photos, in points."""
+        return [seg for _, r in self.slots(page) for seg in corner_ticks(r)] if self.marks else []
+
+    def captions(self, page: int) -> list[tuple[str, Rect]]:
+        """(text, band) pairs drawn over the page, in points."""
+        return []
+
 
 @dataclass
 class NUp(Layout):
@@ -46,10 +66,18 @@ class NUp(Layout):
     cols: int = 2
     hgutter: float = 8.0
     vgutter: float = 8.0
+    caption: str = "none"      # none | filename | number | both: a contact-sheet line under each photo
+    caption_pt: float = 8.0
 
     def __post_init__(self):
         if self.rows < 1 or self.cols < 1:
             raise ValueError("rows and cols must be >= 1")
+        if self.caption not in ("none", "filename", "number", "both"):
+            raise ValueError(f"unknown caption mode {self.caption!r}")
+
+    @property
+    def _band(self) -> float:
+        return self.caption_pt * 1.8 if self.caption != "none" else 0.0
 
     @property
     def per_page(self) -> int:
@@ -67,8 +95,21 @@ class NUp(Layout):
 
     def slots(self, page: int):
         start = page * self.per_page
-        return [(img, self.cell(*divmod(i, self.cols)))
-                for i, img in enumerate(self.images[start:start + self.per_page])]
+        out = []
+        for i, img in enumerate(self.images[start:start + self.per_page]):
+            c = self.cell(*divmod(i, self.cols))
+            out.append((img, Rect(c.x, c.y, c.w, max(1.0, c.h - self._band))))
+        return out
+
+    def captions(self, page: int):
+        if self.caption == "none":
+            return []
+        start, out = page * self.per_page, []
+        for i, img in enumerate(self.images[start:start + self.per_page]):
+            c, n, name = self.cell(*divmod(i, self.cols)), start + i + 1, os.path.basename(img.path)
+            text = {"filename": name, "number": str(n), "both": f"{n}  {name}"}[self.caption]
+            out.append((text, Rect(c.x, c.y + c.h - self._band, c.w, self._band)))
+        return out
 
 
 @dataclass
@@ -275,3 +316,68 @@ class Mosaic(Layout):
     def slots(self, page: int):
         paged = self._paged()
         return paged[page] if page < len(paged) else []
+
+
+@dataclass
+class Strip(Layout):
+    """Photo-booth strips: `frames` photos stacked in each strip, strips tiled over the page.
+
+    Photos fill strips in order (strip 1 first). Each strip is outlined so it can be cut out.
+    """
+    frames: int = 4
+    strip_w: float = 51 * MM    # 2 in
+    strip_h: float = 152 * MM   # 6 in
+    padding: float = 6.0
+    frame_gap: float = 4.0
+    gutter: float = 8.0         # space between strips on the page
+
+    def __post_init__(self):
+        if self.frames < 1 or self.strip_w <= 0 or self.strip_h <= 0:
+            raise ValueError("frames and strip size must be positive")
+        if self.frame_h <= 0 or self.strip_w - 2 * self.padding <= 0:
+            raise ValueError("strip is too small for its frames and padding")
+
+    @property
+    def frame_h(self) -> float:
+        return (self.strip_h - 2 * self.padding - (self.frames - 1) * self.frame_gap) / self.frames
+
+    @property
+    def cols(self) -> int:
+        return max(1, int((self.page.imageable_w + self.gutter) // (self.strip_w + self.gutter)))
+
+    @property
+    def rows(self) -> int:
+        return max(1, int((self.page.imageable_h + self.gutter) // (self.strip_h + self.gutter)))
+
+    @property
+    def per_page(self) -> int:
+        return self.cols * self.rows * self.frames
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.per_page))
+
+    def _strip_xy(self, n: int) -> tuple[float, float]:
+        p = self.page
+        x0 = p.left + (p.imageable_w - (self.cols * self.strip_w + (self.cols - 1) * self.gutter)) / 2
+        y0 = p.top + (p.imageable_h - (self.rows * self.strip_h + (self.rows - 1) * self.gutter)) / 2
+        r, c = divmod(n, self.cols)
+        return x0 + c * (self.strip_w + self.gutter), y0 + r * (self.strip_h + self.gutter)
+
+    def slots(self, page: int):
+        start, out = page * self.per_page, []
+        for i, img in enumerate(self.images[start:start + self.per_page]):
+            n, k = divmod(i, self.frames)
+            sx, sy = self._strip_xy(n)
+            out.append((img, Rect(sx + self.padding, sy + self.padding + k * (self.frame_h + self.frame_gap),
+                                  self.strip_w - 2 * self.padding, self.frame_h)))
+        return out
+
+    def cut_guides(self, page: int):
+        used = ceil_div(len(self.slots(page)), self.frames) if self.slots(page) else 0
+        out = []
+        for n in range(used):
+            x, y = self._strip_xy(n)
+            x1, y1 = x + self.strip_w, y + self.strip_h
+            out += [(x, y, x1, y), (x1, y, x1, y1), (x1, y1, x, y1), (x, y1, x, y)]
+        return out

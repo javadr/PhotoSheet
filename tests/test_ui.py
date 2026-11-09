@@ -231,3 +231,28 @@ def test_layout_rows_follow_selected_kind(app):
     assert w.cell_w.isVisible() and w.gutter.isVisible() and not w.row_h.isVisible()
     w.kind.setCurrentText("Carousel")
     assert not w.gutter.isVisible() and w.segments.isVisible()
+
+
+def test_caption_marks_and_strip_controls(app, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import MM, Strip
+    w = _win_with_images(tmp_path, 3)
+    w.show()
+    assert w.caption.isVisible() and w.marks.isVisible() and not w.frames.isVisible()
+    w.caption.setCurrentText("Both")
+    w.marks.setChecked(True)
+    assert w.layout_.caption == "both" and w.layout_.marks and w.layout_.captions(0)
+    w.kind.setCurrentText("Fixed size")
+    assert w.layout_.marks and w.marks.isVisible() and not w.caption.isVisible()
+    w.kind.setCurrentText("Photo strip")
+    assert isinstance(w.layout_, Strip) and len(w.layout_.images) == 3
+    assert w.frames.isVisible() and w.strip_w.isVisible() and not w.marks.isVisible()
+    w.frames.setValue(3)
+    w.strip_h.setValue(200)
+    assert w.layout_.frames == 3 and abs(w.layout_.strip_h - 200 * MM) < 1e-6
+    f = str(tmp_path / "s.json")
+    preset.save(w.layout_, f)
+    w.kind.setCurrentText("N-up")
+    w.layout_ = preset.load(f)
+    w._sync_controls()
+    assert w.kind.currentText() == "Photo strip" and w.frames.value() == 3 and abs(w.strip_h.value() - 200) < .06

@@ -15,14 +15,14 @@ from PySide6.QtWidgets import (
 
 from ..core import preset
 from ..core.geometry import PageExtent
-from ..core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Poster, Single
+from ..core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Poster, Single, Strip
 from ..core.render import render_page
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792)}
 KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
-         "Fixed size": FixedSize, "Mosaic": Mosaic}
+         "Fixed size": FixedSize, "Mosaic": Mosaic, "Photo strip": Strip}
 KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "carousel",
-        "Fixed size": "fixed", "Mosaic": "mosaic"}
+        "Fixed size": "fixed", "Mosaic": "mosaic", "Photo strip": "strip"}
 SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
                 "Wallet 2.5 × 3.5 in": (63.5, 88.9), "4 × 6 in": (101.6, 152.4),
                 "5 × 7 in": (127, 177.8), "Custom": None}
@@ -237,17 +237,25 @@ class MainWindow(QMainWindow):
         self.cell_w, self.cell_h = self._dspin(10, 400, 35), self._dspin(10, 400, 45)
         self.row_h = self._dspin(10, 300, 50)
         self.size_preset.currentIndexChanged.connect(self._apply_size_preset)
+        self.caption = QComboBox()
+        self.caption.addItems(["None", "Filename", "Number", "Both"])
+        self.marks = QCheckBox("Cut marks")
+        self.frames = self._spin(1, 12, 4)
+        self.strip_w, self.strip_h = self._dspin(20, 400, 51), self._dspin(40, 600, 152)
         self.crop = QCheckBox("Crop all images to fill")
         form = QFormLayout()
         self.rowsof = {}
         for key, label, w in [
             ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Margin (pt)", self.margin),
-            ("nup", "Rows", self.rows), ("nup", "Columns", self.cols), ("nup,fixed,mosaic", "Gutter (pt)", self.gutter),
+            ("nup", "Rows", self.rows), ("nup", "Columns", self.cols), ("nup,fixed,mosaic,strip", "Gutter (pt)", self.gutter),
+            ("nup", "Captions", self.caption), ("nup,fixed", "", self.marks),
             ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
             ("fixed", "Print size", self.size_preset), ("fixed", "Width (mm)", self.cell_w),
             ("fixed", "Height (mm)", self.cell_h), ("mosaic", "Row height (mm)", self.row_h),
+            ("strip", "Frames per strip", self.frames), ("strip", "Strip width (mm)", self.strip_w),
+            ("strip", "Strip height (mm)", self.strip_h),
             ("all", "", self.crop),
         ]:
             form.addRow(label, w)
@@ -347,7 +355,8 @@ class MainWindow(QMainWindow):
         kw = {}
         if cls is NUp:
             kw = dict(rows=self.rows.value(), cols=self.cols.value(),
-                      hgutter=self.gutter.value(), vgutter=self.gutter.value())
+                      hgutter=self.gutter.value(), vgutter=self.gutter.value(),
+                      caption=self.caption.currentText().lower(), marks=self.marks.isChecked())
         elif cls is Carousel:
             kw = dict(segments=self.segments.value(), overlap=self.overlap.value(),
                       angle_offset=self.angle.value(), inner_radius=self.inner.value())
@@ -355,7 +364,10 @@ class MainWindow(QMainWindow):
             kw = dict(poster_w=self.poster_w.value() * 72, poster_h=self.poster_h.value() * 72)
         elif cls is FixedSize:
             kw = dict(cell_w=self.cell_w.value() * MM, cell_h=self.cell_h.value() * MM,
-                      hgutter=self.gutter.value(), vgutter=self.gutter.value())
+                      hgutter=self.gutter.value(), vgutter=self.gutter.value(), marks=self.marks.isChecked())
+        elif cls is Strip:
+            kw = dict(frames=self.frames.value(), strip_w=self.strip_w.value() * MM,
+                      strip_h=self.strip_h.value() * MM, gutter=self.gutter.value())
         elif cls is Mosaic:
             kw = dict(row_height=self.row_h.value() * MM, gutter=self.gutter.value())
         self.layout_ = cls(page=page, **kw)
@@ -375,7 +387,7 @@ class MainWindow(QMainWindow):
                 self.page_size.setCurrentText(n)
         self.margin.setValue(int(lay.page.left))
         for attr, w in [("rows", self.rows), ("cols", self.cols), ("hgutter", self.gutter),
-                        ("gutter", self.gutter), ("segments", self.segments), ("overlap", self.overlap),
+                        ("gutter", self.gutter), ("frames", self.frames), ("segments", self.segments), ("overlap", self.overlap),
                         ("angle_offset", self.angle), ("inner_radius", self.inner)]:
             if hasattr(lay, attr):
                 w.setValue(int(getattr(lay, attr)))
@@ -389,6 +401,12 @@ class MainWindow(QMainWindow):
             self.size_preset.setCurrentText(match[0] if match else "Custom")
         if isinstance(lay, Mosaic):
             self.row_h.setValue(lay.row_height / MM)
+        if isinstance(lay, Strip):
+            self.strip_w.setValue(lay.strip_w / MM)
+            self.strip_h.setValue(lay.strip_h / MM)
+        if hasattr(lay, "caption"):
+            self.caption.setCurrentText(lay.caption.capitalize())
+        self.marks.setChecked(lay.marks)
         self._loading = False
         self._show_kind_rows()
         self._fill_list()

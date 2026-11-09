@@ -127,3 +127,40 @@ def test_mosaic_overflow_starts_new_page_and_missing_file_is_square():
         m.add(ImageItem(f"/nonexistent{i}.jpg"))   # squares: 2 per row, rows stretch to 50 -> 3 rows = 150 > 100
     assert m.pages == 2
     assert all(r.y + r.h <= 100 + 1e-6 for pg in range(m.pages) for _, r in m.slots(pg))
+
+
+def test_nup_captions_reserve_a_band_and_number_across_pages():
+    n = NUp(page=PageExtent(200, 200), rows=1, cols=2, hgutter=0, vgutter=0, caption="both", caption_pt=10)
+    for i in range(3):
+        n.add(ImageItem(f"/x/photo{i}.jpg"))
+    cap = n.captions(1)                                    # page 2 holds image 3
+    assert cap[0][0] == "3  photo2.jpg"
+    (_, img_rect), (_, band) = n.slots(0)[0], n.captions(0)[0]
+    assert abs(img_rect.h + band.h - 200) < 1e-6 and band.y == img_rect.y + img_rect.h
+    assert NUp(caption="none").captions(0) == []
+    with pytest.raises(ValueError):
+        NUp(caption="bogus")
+
+
+def test_marks_give_eight_ticks_per_photo_and_none_by_default():
+    from photosheet.core.layouts import FixedSize
+    f = FixedSize(page=PageExtent(200, 200), cell_w=80, cell_h=80)
+    f.add(ImageItem("a.jpg"))
+    assert f.cut_guides(0) == []
+    f.marks = True
+    assert len(f.cut_guides(0)) == 8
+
+
+def test_strip_geometry_pagination_and_outlines():
+    from photosheet.core.layouts import Strip
+    s = Strip(page=PageExtent(300, 500), frames=3, strip_w=100, strip_h=300, padding=10, frame_gap=5, gutter=10)
+    assert (s.cols, s.rows, s.per_page) == (2, 1, 6)
+    for i in range(7):
+        s.add(ImageItem(f"{i}.jpg"))
+    assert s.pages == 2 and len(s.slots(0)) == 6 and len(s.slots(1)) == 1
+    rects = [r for _, r in s.slots(0)]
+    assert abs(rects[0].h - (300 - 20 - 10) / 3) < 1e-6 and rects[1].y > rects[0].y + rects[0].h   # stacked with a gap
+    assert rects[3].x > rects[0].x + 100 - 1                                                       # 4th photo: second strip
+    assert len(s.cut_guides(0)) == 8 and len(s.cut_guides(1)) == 4                                 # only strips in use
+    with pytest.raises(ValueError):
+        Strip(frames=40, strip_h=100)

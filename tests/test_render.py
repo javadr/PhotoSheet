@@ -103,3 +103,24 @@ def test_fixed_and_mosaic_render_and_cli(red, tmp_path):
         out = tmp_path / f"{lay}.pdf"
         assert cli.main([red, "-o", str(out), "--layout", lay, "--dpi", "50"]) == 0
         assert out.read_bytes().startswith(b"%PDF")
+
+
+def test_marks_captions_and_strip_render(red, tmp_path):
+    from photosheet.core.layouts import FixedSize, Strip
+    f = FixedSize(page=PageExtent(200, 200), cell_w=80, cell_h=80, hgutter=20, vgutter=20, marks=True)
+    f.add(ImageItem(red, crop=True, rotation=0))
+    im = render_page(f, 0, dpi=72)
+    assert im.getpixel((6, 10)) != (255, 255, 255)        # a tick left of the first cell's top-left corner
+    assert im.getpixel((50, 50)) == (255, 0, 0)           # the photo itself is not covered
+    n = NUp(page=PageExtent(200, 200), rows=1, cols=1, caption="both", caption_pt=14)
+    n.add(ImageItem(red, rotation=0))
+    cap = render_page(n, 0, dpi=72)
+    assert any(cap.getpixel((x, y)) != (255, 255, 255) for x in range(60, 140) for y in range(170, 200))  # text drawn
+    s = Strip(page=PageExtent(200, 300), frames=2, strip_w=100, strip_h=250, padding=10, frame_gap=10)
+    for _ in range(2):
+        s.add(ImageItem(red, crop=True, rotation=0))
+    assert render_page(s, 0, dpi=72).getpixel((100, 70)) == (255, 0, 0)
+    for args in (["--layout", "nup", "--caption", "both", "--marks"], ["--layout", "strip", "--frames", "2"],
+                 ["--layout", "fixed", "--marks"]):
+        out = tmp_path / "o.pdf"
+        assert cli.main([red, red, "-o", str(out), "--dpi", "50", *args]) == 0 and out.stat().st_size > 0

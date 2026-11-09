@@ -5,7 +5,7 @@ import argparse
 import sys
 
 from .core.geometry import PageExtent
-from .core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Poster, Single
+from .core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Poster, Single, Strip
 from .core.render import render_all
 
 PAGES = {"a4": (595, 842), "letter": (612, 792)}
@@ -16,11 +16,13 @@ def build(args) -> NUp | Single | Poster:
     page = PageExtent(w, h)
     page.set_margins(*(args.margin,) * 4)
     if args.layout == "nup":
-        lay = NUp(page=page, rows=args.rows, cols=args.cols)
+        lay = NUp(page=page, rows=args.rows, cols=args.cols, caption=args.caption, marks=args.marks)
     elif args.layout == "single":
         lay = Single(page=page)
     elif args.layout == "fixed":
-        lay = FixedSize(page=page, cell_w=args.cell_w * MM, cell_h=args.cell_h * MM)
+        lay = FixedSize(page=page, cell_w=args.cell_w * MM, cell_h=args.cell_h * MM, marks=args.marks)
+    elif args.layout == "strip":
+        lay = Strip(page=page, frames=args.frames, strip_w=args.strip_w * MM, strip_h=args.strip_h * MM)
     elif args.layout == "mosaic":
         lay = Mosaic(page=page, row_height=args.row_height * MM)
     elif args.layout == "carousel":
@@ -37,13 +39,19 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="photosheet-cli")
     ap.add_argument("images", nargs="+")
     ap.add_argument("-o", "--out", required=True, help=".pdf (multipage) or .png (page number appended)")
-    ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic"], default="nup")
+    ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic", "strip"], default="nup")
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--cols", type=int, default=2)
     ap.add_argument("--segments", type=int, default=4)
     ap.add_argument("--cell-w", type=float, default=35, help="fixed layout cell width, mm (default: passport)")
     ap.add_argument("--cell-h", type=float, default=45, help="fixed layout cell height, mm")
     ap.add_argument("--row-height", type=float, default=50, help="mosaic target row height, mm")
+    ap.add_argument("--caption", choices=["none", "filename", "number", "both"], default="none",
+                    help="nup: contact-sheet caption under each photo")
+    ap.add_argument("--marks", action="store_true", help="nup/fixed: crop marks at photo corners")
+    ap.add_argument("--frames", type=int, default=4, help="strip: photos per strip")
+    ap.add_argument("--strip-w", type=float, default=51, help="strip width, mm")
+    ap.add_argument("--strip-h", type=float, default=152, help="strip height, mm")
     ap.add_argument("--page", choices=list(PAGES), default="a4")
     ap.add_argument("--margin", type=float, default=18, help="points")
     ap.add_argument("--poster-w", type=float, default=16, help="inches")

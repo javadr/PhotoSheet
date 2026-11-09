@@ -8,7 +8,7 @@ from collections import OrderedDict
 
 from dataclasses import replace
 
-from PIL import Image, ImageCms, ImageDraw, ImageOps
+from PIL import Image, ImageCms, ImageDraw, ImageFont, ImageOps
 
 from .effects import apply_effects
 from .geometry import Rect, Rotation, fit
@@ -106,6 +106,13 @@ def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s:
     canvas.paste(im, (f.xpos, f.ypos), im if im.mode == "RGBA" else None)
 
 
+def _caption(draw: ImageDraw.ImageDraw, text: str, band: Rect, s: float) -> None:
+    font = ImageFont.load_default(size=max(6, round(band.h / 1.8 * s)))
+    while len(text) > 1 and font.getlength(text) > band.w * s:  # shorten with an ellipsis to fit the cell
+        text = text[:-2].rstrip() + "…"
+    draw.text(((band.x + band.w / 2) * s, (band.y + band.h / 2) * s), text, fill=(70, 70, 70), font=font, anchor="mm")
+
+
 def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str | None = None,
                 background=(255, 255, 255), fast: bool = False) -> Image.Image:
     s = dpi / 72
@@ -132,8 +139,13 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
             ImageDraw.Draw(mask).polygon([(x * s, y * s) for x, y in poly], fill=255)
             canvas.paste(tmp, mask=mask)
         return canvas
+    draw = ImageDraw.Draw(canvas)
+    for x0, y0, x1, y1 in layout.cut_guides(page):  # under the photos, so they never cover an image
+        draw.line((x0 * s, y0 * s, x1 * s, y1 * s), fill=(140, 140, 140), width=max(1, round(0.4 * s)))
     for item, slot in layout.slots(page):
         _place(canvas, item, load(item, printer_profile, fast), slot, s, fast)
+    for text, band in layout.captions(page):
+        _caption(draw, text, band, s)
     return canvas
 
 
