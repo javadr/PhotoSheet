@@ -15,11 +15,17 @@ from PySide6.QtWidgets import (
 
 from ..core import preset
 from ..core.geometry import PageExtent
-from ..core.layouts import Carousel, ImageItem, NUp, Poster, Single
+from ..core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Poster, Single
 from ..core.render import render_page
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792)}
-KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel}
+KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
+         "Fixed size": FixedSize, "Mosaic": Mosaic}
+KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "carousel",
+        "Fixed size": "fixed", "Mosaic": "mosaic"}
+SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
+                "Wallet 2.5 × 3.5 in": (63.5, 88.9), "4 × 6 in": (101.6, 152.4),
+                "5 × 7 in": (127, 177.8), "Custom": None}
 IMG_FILTER = "Images (*.jpg *.jpeg *.png *.tif *.tiff *.bmp *.webp);;All files (*)"
 
 
@@ -226,21 +232,32 @@ class MainWindow(QMainWindow):
         self.segments, self.overlap = self._spin(1, 64, 4), self._spin(0, 180, 30)
         self.angle, self.inner = self._spin(-360, 360, 0), self._spin(0, 400, 0)
         self.poster_w, self.poster_h = self._spin(1, 400, 16), self._spin(1, 400, 12)
+        self.size_preset = QComboBox()
+        self.size_preset.addItems(SIZE_PRESETS)
+        self.cell_w, self.cell_h = self._dspin(10, 400, 35), self._dspin(10, 400, 45)
+        self.row_h = self._dspin(10, 300, 50)
+        self.size_preset.currentIndexChanged.connect(self._apply_size_preset)
         self.crop = QCheckBox("Crop all images to fill")
         form = QFormLayout()
         self.rowsof = {}
         for key, label, w in [
             ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Margin (pt)", self.margin),
-            ("nup", "Rows", self.rows), ("nup", "Columns", self.cols), ("nup", "Gutter (pt)", self.gutter),
+            ("nup", "Rows", self.rows), ("nup", "Columns", self.cols), ("nup,fixed,mosaic", "Gutter (pt)", self.gutter),
             ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
+            ("fixed", "Print size", self.size_preset), ("fixed", "Width (mm)", self.cell_w),
+            ("fixed", "Height (mm)", self.cell_h), ("mosaic", "Row height (mm)", self.row_h),
             ("all", "", self.crop),
         ]:
             form.addRow(label, w)
             self.rowsof.setdefault(key, []).append(w)
+            if w is self.size_preset:
+                continue  # wired to _apply_size_preset, which then calls _layout_changed
             w_changed = getattr(w, "currentIndexChanged", None) or getattr(w, "toggled", None) or w.valueChanged
             w_changed.connect(self._layout_changed)
+            if w in (self.cell_w, self.cell_h):
+                w_changed.connect(self._size_edited)
         box = QWidget()
         box.setLayout(form)
         self.layout_dock = QDockWidget("Layout", self)
@@ -285,6 +302,26 @@ class MainWindow(QMainWindow):
         self._load_effects()
 
     @staticmethod
+    def _dspin(lo, hi, val):
+        s = QDoubleSpinBox(minimum=lo, maximum=hi, decimals=1, singleStep=1.0)
+        s.setValue(val)
+        return s
+
+    def _apply_size_preset(self, *_):
+        size = SIZE_PRESETS[self.size_preset.currentText()]
+        if size:
+            for sp, v in ((self.cell_w, size[0]), (self.cell_h, size[1])):
+                sp.blockSignals(True)
+                sp.setValue(v)
+                sp.blockSignals(False)
+        self._layout_changed()
+
+    def _size_edited(self, *_):
+        self.size_preset.blockSignals(True)  # a hand-typed size is no longer a named preset
+        self.size_preset.setCurrentText("Custom")
+        self.size_preset.blockSignals(False)
+
+    @staticmethod
     def _spin(lo, hi, val):
         s = QSpinBox(minimum=lo, maximum=hi)
         s.setValue(val)
@@ -292,11 +329,10 @@ class MainWindow(QMainWindow):
 
     # ---- layout state ----
     def _show_kind_rows(self):
-        k = self.kind.currentText().lower().replace("-", "")
-        form = self.rowsof
-        for key, widgets in form.items():
+        k = KEYS[self.kind.currentText()]
+        for key, widgets in self.rowsof.items():
             for w in widgets:
-                w.parentWidget().layout().setRowVisible(w, key in ("all", k))
+                w.parentWidget().layout().setRowVisible(w, key == "all" or k in key.split(","))
 
     def _layout_changed(self, *_):
         if self._loading:
@@ -317,6 +353,11 @@ class MainWindow(QMainWindow):
                       angle_offset=self.angle.value(), inner_radius=self.inner.value())
         elif cls is Poster:
             kw = dict(poster_w=self.poster_w.value() * 72, poster_h=self.poster_h.value() * 72)
+        elif cls is FixedSize:
+            kw = dict(cell_w=self.cell_w.value() * MM, cell_h=self.cell_h.value() * MM,
+                      hgutter=self.gutter.value(), vgutter=self.gutter.value())
+        elif cls is Mosaic:
+            kw = dict(row_height=self.row_h.value() * MM, gutter=self.gutter.value())
         self.layout_ = cls(page=page, **kw)
         for it in old.images:
             it.crop = self.crop.isChecked()
@@ -334,13 +375,20 @@ class MainWindow(QMainWindow):
                 self.page_size.setCurrentText(n)
         self.margin.setValue(int(lay.page.left))
         for attr, w in [("rows", self.rows), ("cols", self.cols), ("hgutter", self.gutter),
-                        ("segments", self.segments), ("overlap", self.overlap),
+                        ("gutter", self.gutter), ("segments", self.segments), ("overlap", self.overlap),
                         ("angle_offset", self.angle), ("inner_radius", self.inner)]:
             if hasattr(lay, attr):
                 w.setValue(int(getattr(lay, attr)))
         if isinstance(lay, Poster):
             self.poster_w.setValue(int(lay.poster_w / 72))
             self.poster_h.setValue(int(lay.poster_h / 72))
+        if isinstance(lay, FixedSize):
+            self.cell_w.setValue(lay.cell_w / MM)
+            self.cell_h.setValue(lay.cell_h / MM)
+            match = [n for n, v in SIZE_PRESETS.items() if v and abs(v[0] - lay.cell_w / MM) < .05 and abs(v[1] - lay.cell_h / MM) < .05]
+            self.size_preset.setCurrentText(match[0] if match else "Custom")
+        if isinstance(lay, Mosaic):
+            self.row_h.setValue(lay.row_height / MM)
         self._loading = False
         self._show_kind_rows()
         self._fill_list()

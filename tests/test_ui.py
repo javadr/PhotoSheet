@@ -199,3 +199,35 @@ def test_app_icon_file_loads(app):
     from PySide6.QtGui import QIcon
     icon = QIcon(str(Path(__import__("photosheet").__file__).parent / "icons" / "photosheet.png"))
     assert not icon.isNull() and icon.availableSizes()
+
+
+def test_fixed_size_layout_presets_and_roundtrip(app, tmp_path):
+    from photosheet.core.layouts import MM, FixedSize, Mosaic
+    w = _win_with_images(tmp_path, 2)
+    w.kind.setCurrentText("Fixed size")
+    assert isinstance(w.layout_, FixedSize) and len(w.layout_.images) == 2
+    assert abs(w.layout_.cell_w - 35 * MM) < 1e-6 and abs(w.layout_.cell_h - 45 * MM) < 1e-6
+    w.size_preset.setCurrentText("4 × 6 in")
+    assert abs(w.layout_.cell_w - 101.6 * MM) < 1e-6 and abs(w.layout_.cell_h - 152.4 * MM) < 1e-6
+    w.cell_w.setValue(60)                                   # hand edit -> no longer a named preset
+    assert w.size_preset.currentText() == "Custom" and abs(w.layout_.cell_w - 60 * MM) < 1e-6
+    from photosheet.core import preset
+    f = str(tmp_path / "f.json")
+    preset.save(w.layout_, f)
+    w.kind.setCurrentText("N-up")
+    w.layout_ = preset.load(f)
+    w._sync_controls()
+    assert w.kind.currentText() == "Fixed size" and abs(w.cell_w.value() - 60) < .06
+    w.kind.setCurrentText("Mosaic")
+    assert isinstance(w.layout_, Mosaic) and len(w.layout_.images) == 2
+
+
+def test_layout_rows_follow_selected_kind(app):
+    w = MainWindow()
+    w.show()
+    w.kind.setCurrentText("Mosaic")
+    assert w.row_h.isVisible() and w.gutter.isVisible() and not w.cell_w.isVisible() and not w.rows.isVisible()
+    w.kind.setCurrentText("Fixed size")
+    assert w.cell_w.isVisible() and w.gutter.isVisible() and not w.row_h.isVisible()
+    w.kind.setCurrentText("Carousel")
+    assert not w.gutter.isVisible() and w.segments.isVisible()

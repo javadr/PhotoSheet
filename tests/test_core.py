@@ -75,3 +75,55 @@ def test_preset_roundtrip(tmp_path):
     assert m.images[0].effects == [("Gamma", {"gamma": 1.2})]
     with pytest.raises(ValueError):
         preset.from_dict({})
+
+
+def _img(tmp_path, name, w, h):
+    from PIL import Image
+    p = tmp_path / name
+    Image.new("RGB", (w, h)).save(p)
+    return ImageItem(str(p))
+
+
+def test_fixed_size_packs_page_centres_block_and_paginates():
+    from photosheet.core.layouts import FixedSize
+    f = FixedSize(page=PageExtent(width=220, height=320), cell_w=100, cell_h=150, hgutter=10, vgutter=10)
+    assert (f.cols, f.rows, f.per_page) == (2, 2, 4)
+    for i in range(5):
+        f.add(ImageItem(f"{i}.jpg"))
+    assert f.pages == 2 and len(f.slots(0)) == 4 and len(f.slots(1)) == 1
+    first = f.slots(0)[0][1]
+    assert first == Rect(5, 5, 100, 150)   # 210x310 block centred in 220x320
+
+
+def test_fixed_size_rejects_bad_cell():
+    from photosheet.core.layouts import FixedSize
+    with pytest.raises(ValueError):
+        FixedSize(cell_w=0)
+
+
+def test_mosaic_rows_fill_width_and_keep_aspect(tmp_path):
+    from photosheet.core.layouts import Mosaic
+    m = Mosaic(page=PageExtent(width=400, height=600), row_height=100, gutter=0)
+    for i, (w, h) in enumerate([(200, 100), (200, 100), (100, 200), (100, 100)]):
+        m.add(_img(tmp_path, f"{i}.png", w, h))
+    s = m.slots(0)
+    # first row: aspects 2 + 2 -> 400 px of width at h=100 -> exactly fills the page width
+    assert [round(r.w) for _, r in s[:2]] == [200, 200] and round(s[0][1].h) == 100
+    for img, r in s:                       # every slot keeps its photo's shape
+        assert abs(r.w / r.h - aspect_of(img)) < 1e-6
+    assert m.pages == 1
+
+
+def aspect_of(item):
+    from photosheet.core.layouts import aspect
+    return aspect(item)
+
+
+def test_mosaic_overflow_starts_new_page_and_missing_file_is_square():
+    from photosheet.core.layouts import Mosaic, aspect
+    assert aspect(ImageItem("/nonexistent.jpg")) == 1.0
+    m = Mosaic(page=PageExtent(width=100, height=100), row_height=80, gutter=0)
+    for i in range(6):
+        m.add(ImageItem(f"/nonexistent{i}.jpg"))   # squares: 2 per row, rows stretch to 50 -> 3 rows = 150 > 100
+    assert m.pages == 2
+    assert all(r.y + r.h <= 100 + 1e-6 for pg in range(m.pages) for _, r in m.slots(pg))

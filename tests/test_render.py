@@ -89,3 +89,17 @@ def test_proxy_is_capped_and_full_load_untouched(tmp_path):
     item = ImageItem(str(big))
     assert max(render.load(item, proxy=True).size) == render.PROXY_SIDE
     assert render.load(item).size == (5000, 2500)
+
+
+def test_fixed_and_mosaic_render_and_cli(red, tmp_path):
+    from photosheet.core.layouts import FixedSize, Mosaic
+    f = FixedSize(page=PageExtent(200, 200), cell_w=80, cell_h=80, hgutter=10, vgutter=10)
+    f.add(ImageItem(red, crop=True, rotation=0))
+    assert render_page(f, 0, dpi=72).getpixel((50, 50)) == (255, 0, 0)    # inside first cell (centred block)
+    m = Mosaic(page=PageExtent(200, 200), row_height=60, gutter=0)
+    m.add(ImageItem(red))
+    assert render_page(m, 0, dpi=72).getpixel((30, 15)) == (255, 0, 0)
+    for lay in ("fixed", "mosaic", "carousel", "poster", "single"):
+        out = tmp_path / f"{lay}.pdf"
+        assert cli.main([red, "-o", str(out), "--layout", lay, "--dpi", "50"]) == 0
+        assert out.read_bytes().startswith(b"%PDF")

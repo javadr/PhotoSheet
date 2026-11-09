@@ -5,7 +5,7 @@ import argparse
 import sys
 
 from .core.geometry import PageExtent
-from .core.layouts import ImageItem, NUp, Poster, Single
+from .core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Poster, Single
 from .core.render import render_all
 
 PAGES = {"a4": (595, 842), "letter": (612, 792)}
@@ -19,6 +19,10 @@ def build(args) -> NUp | Single | Poster:
         lay = NUp(page=page, rows=args.rows, cols=args.cols)
     elif args.layout == "single":
         lay = Single(page=page)
+    elif args.layout == "fixed":
+        lay = FixedSize(page=page, cell_w=args.cell_w * MM, cell_h=args.cell_h * MM)
+    elif args.layout == "mosaic":
+        lay = Mosaic(page=page, row_height=args.row_height * MM)
     elif args.layout == "carousel":
         lay = Carousel(page=page, segments=args.segments)
     else:
@@ -33,10 +37,13 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="photosheet-cli")
     ap.add_argument("images", nargs="+")
     ap.add_argument("-o", "--out", required=True, help=".pdf (multipage) or .png (page number appended)")
-    ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel"], default="nup")
+    ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic"], default="nup")
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--cols", type=int, default=2)
     ap.add_argument("--segments", type=int, default=4)
+    ap.add_argument("--cell-w", type=float, default=35, help="fixed layout cell width, mm (default: passport)")
+    ap.add_argument("--cell-h", type=float, default=45, help="fixed layout cell height, mm")
+    ap.add_argument("--row-height", type=float, default=50, help="mosaic target row height, mm")
     ap.add_argument("--page", choices=list(PAGES), default="a4")
     ap.add_argument("--margin", type=float, default=18, help="points")
     ap.add_argument("--poster-w", type=float, default=16, help="inches")
