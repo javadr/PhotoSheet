@@ -1,5 +1,7 @@
 import sys
+from pathlib import Path
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from .ui.main_window import MainWindow, restore_text_size
@@ -7,6 +9,11 @@ from .ui.main_window import MainWindow, restore_text_size
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setApplicationName("PhotoSheet")
+    app.setApplicationDisplayName("PhotoSheet")
+    # Must match the .desktop file name: Wayland/GNOME/KDE use it to pick the Alt+Tab icon and name.
+    app.setDesktopFileName("photosheet")
+    app.setWindowIcon(QIcon(str(Path(__file__).parent / "icons" / "photosheet.png")))
     restore_text_size()
     w = MainWindow()
     w.resize(1200, 800)

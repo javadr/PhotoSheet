@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2d3a8c"/><stop offset="1" stop-color="#0f1538"/>
+    </linearGradient>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a3490"/><stop offset=".55" stop-color="#e5588a"/>
+      <stop offset=".85" stop-color="#ffa45c"/><stop offset="1" stop-color="#ffd37a"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#ece8e1"/>
+    </linearGradient>
+    <filter id="sh" x="-25%" y="-20%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="7" stdDeviation="7" flood-color="#000" flood-opacity=".45"/>
+    </filter>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <g transform="rotate(-5 128 128)">
+    <!-- sheet with a folded top-right corner -->
+    <path d="M54 40a8 8 0 0 1 8-8h108l36 36v152a8 8 0 0 1-8 8H62a8 8 0 0 1-8-8z" fill="url(#paper)" filter="url(#sh)"/>
+    <path d="M170 32v28a8 8 0 0 0 8 8h28z" fill="#cfc9be"/>
+    <!-- one panorama, cut into four prints -->
+    <g>
+      <rect x="70" y="58" width="116" height="116" fill="url(#sky)"/>
+      <circle cx="148" cy="128" r="24" fill="#fff0c2"/>
+      <path d="M70 140l22-22 20 16 26-26 30 28 18-10V174H70z" fill="#8a4a9c"/>
+      <path d="M70 154l28-20 26 20 22-14 40 22V174H70z" fill="#4d2a7a"/>
+      <path d="M70 166l36-12 30 12 50-10V174H70z" fill="#241448"/>
+    </g>
+    <!-- paper gutters turn the one picture into four prints -->
+    <rect x="125" y="58" width="6" height="116" fill="#f6f4ef"/>
+    <rect x="70" y="113" width="116" height="6" fill="#f6f4ef"/>
+    <!-- caption lines -->
+    <rect x="70" y="190" width="84" height="6" rx="3" fill="#cfd5df"/>
+    <rect x="70" y="204" width="52" height="6" rx="3" fill="#e2e6ed"/>
+  </g>
+</svg>

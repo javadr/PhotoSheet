@@ -7,6 +7,7 @@ BUILD_TOOL := $(if $(HAS_UV),uv build,python -m build)
 VENV:=$(shell echo "$${VIRTUAL_ENV-}")
 BIN:=$(if $(VENV),$(VIRTUAL_ENV)/bin,$(HOME)/.local/bin)
 APP_DESKTOP:=$(HOME)/.local/share/applications/photosheet.desktop
+APP_ICON:=$(HOME)/.local/share/icons/photosheet.png
 
 .ONESHELL:
 
@@ -30,13 +31,15 @@ test: ## Run the test suite (Qt tests run offscreen)
 
 .PHONY: install-desktop-file
 install-desktop-file: ## Generate a desktop launcher for the GUI app
+	@mkdir -p $(HOME)/.local/share/icons $(HOME)/.local/share/applications
+	@cp photosheet/icons/photosheet.png $(APP_ICON)
 	@echo "Generating the desktop file..."
 	cat <<EOF > $(APP_DESKTOP).tmp
 	[Desktop Entry]
 	Name=PhotoSheet
 	Keywords=PhotoSheet;Photo;Print;Contact sheet;
 	Exec=$(BIN)/photosheet
-	Icon=applications-graphics
+	Icon=photosheet
 	StartupWMClass=photosheet
 	Version=$(VER)
 	Hidden=false
@@ -57,14 +60,15 @@ install-dev: install-desktop-file ## Install photosheet locally in editable/deve
 uninstall: ## Uninstall photosheet and remove its desktop file
 	@echo "Uninstalling photosheet ..."
 	@$(PKG_TOOL) uninstall photosheet
-	rm -fv $(APP_DESKTOP)
+	rm -fv $(APP_DESKTOP) $(APP_ICON)
 
 setup: ver ## Build source and wheel distribution packages
 	$(BUILD_TOOL)
 
 .PHONY: compile-pyinstaller
 compile-pyinstaller: ver ## Build a standalone binary with PyInstaller
-	pyinstaller --onefile --windowed --clean --noupx photosheet/__main__.py -n photosheet-v$(VER)
+	pyinstaller --onefile --windowed --clean --noupx -i photosheet/icons/photosheet.ico \
+	--add-data photosheet/icons:photosheet/icons photosheet/__main__.py -n photosheet-v$(VER)
 	ls -lh dist
 
 clean: ver ## Clean build artifacts

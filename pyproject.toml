@@ -19,5 +19,8 @@ version = {attr = "photosheet.__version__"}
 [tool.setuptools.packages.find]
 include = ["photosheet*"]
 
+[tool.setuptools.package-data]
+photosheet = ["icons/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

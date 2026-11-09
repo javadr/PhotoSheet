@@ -191,3 +191,11 @@ def test_zoom_is_instant_and_renders_are_coalesced(app, tmp_path):
     time.sleep(0.2)
     app.processEvents()
     assert w._gen == gen + 1                       # one real render after input settled
+
+
+def test_app_icon_file_loads(app):
+    from pathlib import Path
+
+    from PySide6.QtGui import QIcon
+    icon = QIcon(str(Path(__import__("photosheet").__file__).parent / "icons" / "photosheet.png"))
+    assert not icon.isNull() and icon.availableSizes()
