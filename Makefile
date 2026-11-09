@@ -73,6 +73,7 @@ compile-pyinstaller: ver ## Build a standalone binary with PyInstaller
 
 clean: ver ## Clean build artifacts
 	@rm -rfv photosheet.egg-info build dist .pytest_cache photosheet-v*.spec
+	@find . -name __pycache__ -type d -not -path './.venv/*' -prune -exec rm -rfv {} +
 
 # Aliases
 .PHONY: lins
