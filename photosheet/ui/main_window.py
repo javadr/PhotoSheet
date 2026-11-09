@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from PIL import Image
-from PySide6.QtCore import QObject, QRunnable, QSettings, QSizeF, Qt, QThreadPool, Signal
-from PySide6.QtGui import QAction, QImage, QPageSize, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QObject, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPageSize, QPainter, QPalette, QPixmap
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
@@ -67,7 +67,8 @@ class _Job(QRunnable):
 
 
 class MainWindow(QMainWindow):
-    PREVIEW_DPI = 100
+    SCREEN_DPI = 96   # 100% zoom
+    FIT_PAD = 40      # px of desk around the paper in fit mode
 
     def __init__(self):
         super().__init__()
@@ -81,10 +82,15 @@ class MainWindow(QMainWindow):
 
         self.preview = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.preview.setAccessibleName("Page preview")
-        scroll = QScrollArea()
-        scroll.setWidget(self.preview)
-        scroll.setWidgetResizable(True)
-        self.setCentralWidget(scroll)
+        self.zoom: float | None = None   # None = fit to window
+        self.scroll = QScrollArea()
+        self.scroll.setWidget(self.preview)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setBackgroundRole(QPalette.ColorRole.Mid)  # a "desk" so the white paper's edge shows
+        self.scroll.viewport().installEventFilter(self)
+        self._fit_timer = QTimer(self, singleShot=True, interval=150)
+        self._fit_timer.timeout.connect(self.refresh)
+        self.setCentralWidget(self.scroll)
         self._build_menu()
         self._build_layout_dock()
         self._build_image_dock()
@@ -122,6 +128,11 @@ class MainWindow(QMainWindow):
                 self.page_label.setAccessibleName("Current page")
                 tb.addWidget(self.page_label)
         v = self.menuBar().addMenu("&View")
+        act(v, "Fit to Window", lambda: self.set_zoom(None), "Ctrl+0")
+        act(v, "Actual Size", lambda: self.set_zoom(1.0), "Ctrl+1")
+        act(v, "Zoom In", lambda: self.set_zoom((self.zoom or self._fit_zoom()) * 1.25), QKeySequence.StandardKey.ZoomIn)
+        act(v, "Zoom Out", lambda: self.set_zoom((self.zoom or self._fit_zoom()) / 1.25), QKeySequence.StandardKey.ZoomOut)
+        v.addSeparator()
         act(v, "Larger Text", lambda: change_text_size(+1))
         act(v, "Smaller Text", lambda: change_text_size(-1))
 
@@ -317,11 +328,45 @@ class MainWindow(QMainWindow):
         self.page_no = max(0, min(n, self.layout_.pages - 1))
         self.refresh()
 
+    def _fit_zoom(self) -> float:
+        vp, p = self.scroll.viewport().size(), self.layout_.page
+        pad = 2 * self.FIT_PAD
+        avail = min((vp.width() - pad) / p.width, (vp.height() - pad) / p.height)  # px per point
+        return max(0.1, avail * 72 / self.SCREEN_DPI)
+
+    def set_zoom(self, z):
+        self.zoom = None if z is None else max(0.1, min(4.0, z))
+        self.refresh()
+
+    def eventFilter(self, obj, ev):
+        if obj is self.scroll.viewport() and ev.type() == QEvent.Type.Resize and self.zoom is None:
+            self._fit_timer.start()  # debounce: re-fit once resizing settles
+        return super().eventFilter(obj, ev)
+
+    def _paper(self, img: QImage, dpr: float) -> QPixmap:
+        """The rendered page on a soft shadow with a hairline edge."""
+        pad = round(14 * dpr)
+        pm = QPixmap(img.width() + 2 * pad, img.height() + 2 * pad)
+        pm.fill(Qt.GlobalColor.transparent)
+        qp = QPainter(pm)
+        for i in range(8):  # cheap stepped shadow, no blur filter needed
+            qp.fillRect(pad - i + round(2 * dpr), pad - i + round(3 * dpr), img.width() + 2 * i,
+                        img.height() + 2 * i, QColor(0, 0, 0, 9))
+        qp.drawImage(pad, pad, img)
+        qp.setPen(QColor(0, 0, 0, 70))
+        qp.drawRect(pad - 1, pad - 1, img.width() + 1, img.height() + 1)
+        qp.end()
+        pm.setDevicePixelRatio(dpr)
+        return pm
+
     def refresh(self):
         self.page_no = max(0, min(self.page_no, self.layout_.pages - 1))
         self.page_label.setText(f" {self.page_no + 1} / {self.layout_.pages} ")
         self._gen += 1
-        self.pool.start(_Job(self._gen, self.layout_, self.page_no, self.PREVIEW_DPI, self.sig))
+        dpr = self.devicePixelRatioF()
+        z = self.zoom if self.zoom is not None else self._fit_zoom()
+        self._dpr = dpr
+        self.pool.start(_Job(self._gen, self.layout_, self.page_no, self.SCREEN_DPI * z * dpr, self.sig))
 
     def _on_rendered(self, gen, res):
         if gen != self._gen:
@@ -330,7 +375,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Render failed: {res}")
         else:
             self.statusBar().clearMessage()
-            self.preview.setPixmap(QPixmap.fromImage(res))
+            self.preview.setPixmap(self._paper(res, self._dpr))
 
     # ---- files ----
     def open_preset(self):

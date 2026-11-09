@@ -46,3 +46,21 @@ def test_page_buttons_are_named_and_text_never_below_minimum(app):
     assert app.font().pointSizeF() >= 10.0
     change_text_size(+50, persist=False)
     assert app.font().pointSizeF() <= 24.0
+
+
+def test_fit_zoom_fits_viewport_and_actual_size_is_96dpi(app):
+    w = MainWindow()
+    w.resize(1000, 700)
+    w.show()
+    app.processEvents()
+    z = w._fit_zoom()
+    vp, p = w.scroll.viewport().size(), w.layout_.page
+    px_w, px_h = p.width * z * 96 / 72, p.height * z * 96 / 72
+    assert px_w <= vp.width() and px_h <= vp.height()           # whole page visible
+    assert abs(px_h - (vp.height() - 2 * w.FIT_PAD)) < 2 or abs(px_w - (vp.width() - 2 * w.FIT_PAD)) < 2
+    w.set_zoom(1.0)
+    assert w.zoom == 1.0
+    w.set_zoom(99)
+    assert w.zoom == 4.0
+    w.set_zoom(None)
+    assert w.zoom is None
