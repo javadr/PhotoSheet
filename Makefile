@@ -1,4 +1,4 @@
-VER=$(shell grep __version__ photosheet/__init__.py|cut -d= -f2|tr -d '\" ')
+VER=$(shell grep __version__ src/__init__.py|cut -d= -f2|tr -d '\" ')
 
 HAS_UV := $(shell command -v uv >/dev/null 2>&1 && echo 1)
 PKG_TOOL := $(if $(HAS_UV),uv pip,pip)
@@ -19,11 +19,11 @@ ver: ## Show the version number
 
 .PHONY: run
 run: ## Run the GUI straight from the source tree (no install needed)
-	python -m photosheet
+	python -m src
 
 .PHONY: run-cli
 run-cli: ## Run the CLI, e.g. make run-cli ARGS="a.jpg b.jpg -o out.pdf --rows 2 --cols 2"
-	python -m photosheet.cli $(ARGS)
+	python -m src.cli $(ARGS)
 
 .PHONY: test
 test: ## Run the test suite (Qt tests run offscreen)
@@ -32,7 +32,7 @@ test: ## Run the test suite (Qt tests run offscreen)
 .PHONY: install-desktop-file
 install-desktop-file: ## Generate a desktop launcher for the GUI app
 	@mkdir -p $(HOME)/.local/share/icons $(HOME)/.local/share/applications
-	@cp photosheet/icons/photosheet.png $(APP_ICON)
+	@cp src/icons/photosheet.png $(APP_ICON)
 	@echo "Generating the desktop file..."
 	cat <<EOF > $(APP_DESKTOP).tmp
 	[Desktop Entry]
@@ -67,8 +67,8 @@ setup: ver ## Build source and wheel distribution packages
 
 .PHONY: compile-pyinstaller
 compile-pyinstaller: ver ## Build a standalone binary with PyInstaller
-	pyinstaller --onefile --windowed --clean --noupx -i photosheet/icons/photosheet.ico \
-	--add-data photosheet/icons:photosheet/icons photosheet/__main__.py -n photosheet-v$(VER)
+	pyinstaller --onefile --windowed --clean --noupx -i src/icons/photosheet.ico \
+	--add-data src/icons:photosheet/icons src/__main__.py -n photosheet-v$(VER)
 	ls -lh dist
 
 clean: ver ## Clean build artifacts

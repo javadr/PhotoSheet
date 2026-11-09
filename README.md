@@ -1,4 +1,4 @@
-<p align="center"><img src="photosheet/icons/photosheet.png" width="128" alt="PhotoSheet logo"></p>
+<p align="center"><img src="src/icons/photosheet.png" width="128" alt="PhotoSheet logo"></p>
 
 # PhotoSheet
 
@@ -72,5 +72,5 @@ make test      # runs the test suite (the Qt tests run offscreen)
 make help      # lists all targets
 ```
 
-The layout and rendering code (`photosheet/core/`) does not import Qt, so it can be tested and used on
-its own. The window lives in `photosheet/ui/`.
+The layout and rendering code (`src/core/`) does not import Qt, so it can be tested and used on
+its own. The window lives in `src/ui/`.
