@@ -4,8 +4,8 @@ from __future__ import annotations
 import copy
 
 from PIL import Image
-from PySide6.QtCore import QEvent, QObject, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QPageSize, QPainter, QPalette, QFont, QPixmap, QUndoCommand, QUndoStack
+from PySide6.QtCore import QEvent, QObject, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
@@ -131,6 +131,32 @@ class _Job(QRunnable):
             pass  # window closed while rendering
 
 
+class _PageLabel(QLabel):
+    """Page preview that paints drag-and-drop feedback over the rendered page."""
+
+    def __init__(self):
+        super().__init__(alignment=Qt.AlignmentFlag.AlignCenter)
+        self.overlay: list[tuple[QRectF, str]] = []   # ("src" dims the picked photo, "dst" outlines the target)
+        self.setMouseTracking(True)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if not self.overlay:
+            return
+        p = QPainter(self)
+        hl = self.palette().color(QPalette.ColorRole.Highlight)
+        for rect, kind in self.overlay:
+            if kind == "src":
+                p.fillRect(rect, QColor(0, 0, 0, 90))
+            else:
+                fill = QColor(hl)
+                fill.setAlpha(70)
+                p.setPen(QPen(hl, 3))
+                p.setBrush(fill)
+                p.drawRect(rect)
+        p.end()
+
+
 class MainWindow(QMainWindow):
     SCREEN_DPI = 96   # 100% zoom
     FIT_PAD = 40      # px of desk around the paper in fit mode
@@ -146,8 +172,10 @@ class MainWindow(QMainWindow):
         self.pool = QThreadPool.globalInstance()
         self.undo_stack = QUndoStack(self)
 
-        self.preview = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        self.preview = _PageLabel()
         self.preview.setAccessibleName("Page preview")
+        self.preview.installEventFilter(self)
+        self._press, self._dragging, self._drop = None, False, None   # page drag-and-drop state
         self.zoom: float | None = None   # None = fit to window
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.preview)
@@ -525,7 +553,83 @@ class MainWindow(QMainWindow):
         self._rescale_preview()      # instant: stretch the last render
         self._fit_timer.start()      # sharp: one real render once input settles
 
+    # ---- drag a photo on the page onto another to swap them ----
+    def _slot_rect(self, r) -> QRectF:
+        """A layout slot (points) as a rectangle in the preview widget's coordinates."""
+        pm = self.preview.pixmap()
+        z = self.zoom if self.zoom is not None else self._fit_zoom()
+        k = self.SCREEN_DPI * z / 72                      # screen px per point
+        size = pm.deviceIndependentSize()
+        ox = (self.preview.width() - size.width()) / 2 + 14   # 14 = the paper margin drawn by _paper
+        oy = (self.preview.height() - size.height()) / 2 + 14
+        return QRectF(ox + r.x * k, oy + r.y * k, r.w * k, r.h * k)
+
+    def _slots_now(self):
+        """[(index into layout_.images, slot rect)] for the page on screen. Photos are matched by identity."""
+        imgs = self.layout_.images
+        if not imgs or self.preview.pixmap().isNull():
+            return []
+        try:
+            return [(next(i for i, x in enumerate(imgs) if x is it), r) for it, r in self.layout_.slots(self.page_no)]
+        except IndexError:
+            return []
+
+    def _slot_at(self, pos):
+        return next(((i, r) for i, r in reversed(self._slots_now()) if self._slot_rect(r).contains(pos)), None)
+
+    def _swap_images(self, i, j):
+        def change():
+            imgs = self.layout_.images
+            imgs[i], imgs[j] = imgs[j], imgs[i]
+        self._edit("Move Image", change)
+        self._fill_list()
+        self.list.setCurrentRow(j)   # the photo you moved stays selected
+        self.refresh()
+
+    def _page_mouse(self, ev) -> bool:
+        if isinstance(self.layout_, (Carousel, Poster)):  # overlapping wedges / one tiled image: swap makes no sense
+            return False
+        t, left = ev.type(), Qt.MouseButton.LeftButton
+        if t == QEvent.Type.MouseButtonPress and ev.button() == left:
+            hit = self._slot_at(ev.position())
+            self._press = (hit, ev.position()) if hit else None
+            return False
+        if t == QEvent.Type.MouseMove:
+            if self._press and ev.buttons() & left:
+                (src, src_rect), start = self._press
+                if (ev.position() - start).manhattanLength() >= QApplication.startDragDistance():
+                    self._dragging = True
+                    self.preview.setCursor(Qt.CursorShape.ClosedHandCursor)
+                if self._dragging:
+                    hit = self._slot_at(ev.position())
+                    self._drop = hit[0] if hit and hit[0] != src else None
+                    self.preview.overlay = [(self._slot_rect(src_rect), "src")]
+                    if self._drop is not None:
+                        self.preview.overlay.append((self._slot_rect(hit[1]), "dst"))
+                    self.preview.update()
+                    return True
+            elif not ev.buttons():
+                self.preview.setCursor(Qt.CursorShape.OpenHandCursor if self._slot_at(ev.position())
+                                       else Qt.CursorShape.ArrowCursor)
+            return False
+        if t == QEvent.Type.MouseButtonRelease and ev.button() == left:
+            press, dragging, drop = self._press, self._dragging, self._drop
+            self._press, self._dragging, self._drop = None, False, None
+            self.preview.overlay = []
+            self.preview.update()
+            self.preview.setCursor(Qt.CursorShape.ArrowCursor)
+            if press:
+                src = press[0][0]
+                if dragging and drop is not None:
+                    self._swap_images(src, drop)
+                elif not dragging:
+                    self.list.setCurrentRow(src)   # a plain click selects the photo
+                return True
+        return False
+
     def eventFilter(self, obj, ev):
+        if obj is self.preview:
+            return self._page_mouse(ev) if isinstance(ev, QMouseEvent) else False
         if obj is self.scroll.viewport():
             if (ev.type() == QEvent.Type.Wheel and ev.angleDelta().y()
                     and ev.modifiers() & Qt.KeyboardModifier.ControlModifier):

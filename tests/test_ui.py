@@ -256,3 +256,73 @@ def test_caption_marks_and_strip_controls(app, tmp_path):
     w.layout_ = preset.load(f)
     w._sync_controls()
     assert w.kind.currentText() == "Photo strip" and w.frames.value() == 3 and abs(w.strip_h.value() - 200) < .06
+
+
+def _mouse(app, w, kind, pos, buttons=None):
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+    types = {"press": QEvent.Type.MouseButtonPress, "move": QEvent.Type.MouseMove,
+             "release": QEvent.Type.MouseButtonRelease}
+    left, none = Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton
+    held = left if kind != "release" else none
+    ev = QMouseEvent(types[kind], QPointF(pos), QPointF(pos), left if kind != "move" else none, held,
+                     Qt.KeyboardModifier.NoModifier)
+    app.sendEvent(w.preview, ev)
+
+
+def _ready_window(app, tmp_path, n=3):
+    import time
+    w = _win_with_images(tmp_path, n)
+    w.resize(1100, 800)
+    w.show()
+    t = time.time() + 5
+    while w.preview.pixmap().isNull() and time.time() < t:
+        app.processEvents()
+    return w
+
+
+def test_drag_photo_onto_another_swaps_them_and_undoes(app, tmp_path):
+    w = _ready_window(app, tmp_path)
+    names = lambda: [i.path[-5:] for i in w.layout_.images]
+    assert names() == ["0.png", "1.png", "2.png"]
+    slots = dict(w._slots_now())
+    a, c = w._slot_rect(slots[0]).center(), w._slot_rect(slots[2]).center()
+    _mouse(app, w, "press", a)
+    _mouse(app, w, "move", (a + c) / 2)
+    assert w.preview.overlay and w._dragging                   # feedback is showing
+    _mouse(app, w, "move", c)
+    assert [k for _, k in w.preview.overlay] == ["src", "dst"]
+    _mouse(app, w, "release", c)
+    assert names() == ["2.png", "1.png", "0.png"] and not w.preview.overlay
+    assert w.undo_act.text() == "Undo Move Image" and w.list.currentRow() == 2
+    w.undo_stack.undo()
+    assert names() == ["0.png", "1.png", "2.png"]
+
+
+def test_click_selects_and_drop_outside_cancels(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = _ready_window(app, tmp_path)
+    slots = dict(w._slots_now())
+    p1 = w._slot_rect(slots[1]).center()
+    _mouse(app, w, "press", p1)
+    _mouse(app, w, "release", p1)
+    assert w.list.currentRow() == 1                            # plain click selects, nothing moves
+    p0 = w._slot_rect(slots[0]).center()
+    _mouse(app, w, "press", p0)
+    _mouse(app, w, "move", p0 + QPointF(40, 0))
+    _mouse(app, w, "release", QPointF(2, 2))                   # released on the desk, outside every photo
+    assert [i.path[-5:] for i in w.layout_.images] == ["0.png", "1.png", "2.png"]
+    assert not w.undo_stack.canUndo() or w.undo_act.text() == "Undo Add Images"
+
+
+def test_page_drag_is_off_for_carousel_and_safe_when_empty(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = MainWindow()
+    w.show()
+    assert w._slots_now() == []                                # empty window: no crash
+    w.kind.setCurrentText("Single")
+    assert w._slots_now() == []                                # Single with no images used to raise IndexError
+    w = _ready_window(app, tmp_path)
+    w.kind.setCurrentText("Carousel")
+    _mouse(app, w, "press", QPointF(300, 300))
+    assert w._press is None
