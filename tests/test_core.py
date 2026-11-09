@@ -194,3 +194,12 @@ def test_passport_copies_and_sharing_the_sheet():
     assert p.pages == 1 and p.slots(0) == []                                  # no photos: empty, no crash
     with pytest.raises(ValueError):
         Passport(copies=-1)
+
+
+def test_crop_overflow_is_how_far_the_photo_sticks_out():
+    from photosheet.core.geometry import crop_overflow
+    assert crop_overflow(200, 100, Rect(0, 0, 100, 100), Rotation.NONE) == (100, 0)   # wide photo, square slot
+    assert crop_overflow(100, 200, Rect(0, 0, 100, 100), Rotation.NONE) == (0, 100)
+    assert crop_overflow(200, 100, Rect(0, 0, 100, 200), Rotation.NONE) == (300, 0)
+    assert crop_overflow(200, 100, Rect(0, 0, 100, 200)) == (0, 0)                    # AUTO turns it to fit exactly
+    assert crop_overflow(100, 100, Rect(0, 0, 50, 50)) == (0, 0)                      # same shape: nothing to move

@@ -43,6 +43,22 @@ class Fit:
     scale: float
 
 
+def _oriented(src_w: float, src_h: float, target: Rect, rotation: Rotation) -> tuple[float, float, Rotation]:
+    """Source size as drawn (after any rotation) and the rotation actually used."""
+    if rotation == Rotation.AUTO:
+        rotation = Rotation.R90 if (src_w > src_h) != (target.w > target.h) else Rotation.NONE
+    if rotation in (Rotation.R90, Rotation.R270):
+        src_w, src_h = src_h, src_w
+    return src_w, src_h, rotation
+
+
+def crop_overflow(src_w: float, src_h: float, target: Rect, rotation: int = Rotation.AUTO) -> tuple[float, float]:
+    """How far (points, x and y) a cropped photo extends past its slot. 0 on an axis means nothing to pan."""
+    w, h, _ = _oriented(src_w, src_h, target, Rotation(rotation))
+    s = max(target.w / w, target.h / h)
+    return max(0.0, w * s - target.w), max(0.0, h * s - target.h)
+
+
 def fit(src_w: float, src_h: float, target: Rect, crop: bool = False,
         rotation: Rotation = Rotation.AUTO, hpan: float = 0.5, vpan: float = 0.5) -> Fit:
     """Fit a src_w x src_h image into target.
@@ -53,10 +69,7 @@ def fit(src_w: float, src_h: float, target: Rect, crop: bool = False,
     shortcut: reimplemented from usage (original library source unavailable), so
     rounding may differ from PhotoPrint by a pixel; verify against real output.
     """
-    if rotation == Rotation.AUTO:
-        rotation = Rotation.R90 if (src_w > src_h) != (target.w > target.h) else Rotation.NONE
-    if rotation in (Rotation.R90, Rotation.R270):
-        src_w, src_h = src_h, src_w
+    src_w, src_h, rotation = _oriented(src_w, src_h, target, rotation)
     s = max(target.w / src_w, target.h / src_h) if crop else min(target.w / src_w, target.h / src_h)
     w, h = round(src_w * s), round(src_h * s)
     if crop:

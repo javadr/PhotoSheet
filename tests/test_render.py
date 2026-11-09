@@ -134,3 +134,15 @@ def test_cli_passport_4x6_landscape_renders_eight_copies(red, tmp_path):
     assert im.size == (432, 288)
     red_blocks = sum(1 for x in (60, 165, 270, 375) for y in (70, 215) if im.getpixel((x, y)) == (255, 0, 0))
     assert red_blocks == 8                                  # one photo copied into all 4 x 2 slots
+
+
+def test_pan_picks_which_part_of_a_cropped_photo_is_printed(tmp_path):
+    p = tmp_path / "half.png"
+    im = Image.new("RGB", (200, 100), (255, 0, 0))
+    im.paste((0, 0, 255), (100, 0, 200, 100))                 # left half red, right half blue
+    im.save(p)
+    n = NUp(page=PageExtent(100, 100), rows=1, cols=1)
+    n.add(ImageItem(str(p), crop=True, rotation=0, hpan=0.0))
+    assert render_page(n, 0, dpi=72).getpixel((50, 50)) == (255, 0, 0)       # pan left: the red side
+    n.images[0].hpan = 1.0
+    assert render_page(n, 0, dpi=72).getpixel((50, 50)) == (0, 0, 255)       # pan right: the blue side

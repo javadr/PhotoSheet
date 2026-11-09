@@ -5,7 +5,7 @@ import pytest
 from PIL import Image
 
 pytest.importorskip("PySide6")
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
@@ -259,7 +259,7 @@ def test_caption_marks_and_strip_controls(app, tmp_path):
     assert w.kind.currentText() == "Photo strip" and w.frames.value() == 3 and abs(w.strip_h.value() - 200) < .06
 
 
-def _mouse(app, w, kind, pos, buttons=None):
+def _mouse(app, w, kind, pos, mod=Qt.KeyboardModifier.NoModifier):
     from PySide6.QtCore import QEvent, QPointF
     from PySide6.QtGui import QMouseEvent
     types = {"press": QEvent.Type.MouseButtonPress, "move": QEvent.Type.MouseMove,
@@ -267,7 +267,7 @@ def _mouse(app, w, kind, pos, buttons=None):
     left, none = Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton
     held = left if kind != "release" else none
     ev = QMouseEvent(types[kind], QPointF(pos), QPointF(pos), left if kind != "move" else none, held,
-                     Qt.KeyboardModifier.NoModifier)
+                     mod)
     app.sendEvent(w.preview, ev)
 
 
@@ -316,17 +316,14 @@ def test_click_selects_and_drop_outside_cancels(app, tmp_path):
     assert not w.undo_stack.canUndo() or w.undo_act.text() == "Undo Add Images"
 
 
-def test_page_drag_is_off_for_carousel_and_safe_when_empty(app, tmp_path):
-    from PySide6.QtCore import QPointF
+def test_page_drag_is_safe_when_empty(app, tmp_path):
     w = MainWindow()
     w.show()
     assert w._slots_now() == []                                # empty window: no crash
     w.kind.setCurrentText("Single")
     assert w._slots_now() == []                                # Single with no images used to raise IndexError
-    w = _ready_window(app, tmp_path)
     w.kind.setCurrentText("Carousel")
-    _mouse(app, w, "press", QPointF(300, 300))
-    assert w._press is None
+    assert w._slots_now() == [] and w._slot_at(QPointF(100, 100)) is None
 
 
 def test_page_navigation_sits_centred_below_the_preview(app, tmp_path):
@@ -403,3 +400,124 @@ def test_orientation_applies_to_every_layout_and_passport_drag_is_off(app, tmp_p
     w.kind.setCurrentText("Passport")
     _mouse(app, w, "press", QPointF(300, 300))
     assert w._press is None
+
+
+def test_dragging_a_cropped_photo_repositions_it_and_undoes(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    from photosheet.core.geometry import crop_overflow
+    w = _ready_window(app, tmp_path)
+    w.crop.setChecked(True)
+    assert all(i.crop for i in w.layout_.images)
+    for i in w.layout_.images:
+        i.rotation = 0            # automatic rotation would turn the wide photo to fit the tall cell
+    slots = dict(w._slots_now())
+    item = w.layout_.images[0]
+    ox, _ = crop_overflow(40 / 30 * 1000, 1000, slots[0], item.rotation)
+    assert ox > 100                                           # a wide photo in a tall cell: plenty to pan
+    k = w.SCREEN_DPI * w._fit_zoom() / 72
+    c = w._slot_rect(slots[0]).center()
+    _mouse(app, w, "press", c)
+    _mouse(app, w, "move", c + QPointF(-30, 0))
+    _mouse(app, w, "move", c + QPointF(-60, 0))               # drag the photo 60 px left
+    assert abs(item.hpan - (0.5 + 60 / k / ox)) < 1e-6        # ...so more of its right side shows
+    assert item.vpan == 0.5 and not w.preview.overlay          # only the free axis moves; no swap feedback
+    _mouse(app, w, "release", c + QPointF(-60, 0))
+    assert w.undo_act.text() == "Undo Reposition Photo"
+    w.undo_stack.undo()
+    assert item.hpan == 0.5 or w.layout_.images[0].hpan == 0.5
+    _mouse(app, w, "press", c)
+    _mouse(app, w, "move", c + QPointF(5000, 0))              # far past the edge: clamped, never negative
+    assert w.layout_.images[0].hpan == 0.0
+    _mouse(app, w, "release", c)
+
+
+def test_shift_drag_swaps_even_when_cropped_and_click_selects(app, tmp_path):
+    w = _ready_window(app, tmp_path)
+    w.crop.setChecked(True)
+    names = lambda: [i.path[-5:] for i in w.layout_.images]
+    slots = dict(w._slots_now())
+    a, c = w._slot_rect(slots[0]).center(), w._slot_rect(slots[2]).center()
+    shift = Qt.KeyboardModifier.ShiftModifier
+    _mouse(app, w, "press", a, shift)
+    _mouse(app, w, "move", c, shift)
+    _mouse(app, w, "release", c, shift)
+    assert names() == ["2.png", "1.png", "0.png"]
+    assert all(i.hpan == 0.5 for i in w.layout_.images)       # nothing was repositioned
+    p = w._slot_rect(dict(w._slots_now())[1]).center()
+    _mouse(app, w, "press", p)
+    _mouse(app, w, "release", p)
+    assert w.list.currentRow() == 1                            # a plain click still just selects
+
+
+def test_center_photo_resets_framing_and_passport_can_pan(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = _ready_window(app, tmp_path, 1)
+    w.crop.setChecked(True)
+    w.list.setCurrentRow(0)
+    w.layout_.images[0].hpan = 0.9
+    w._center_photo()
+    assert w.layout_.images[0].hpan == 0.5 and w.undo_act.text() == "Undo Center Photo"
+    w.kind.setCurrentText("Passport")                          # many slots share one photo: panning frames them all
+    w.crop.setChecked(True)
+    slots = w._slots_now()
+    c = w._slot_rect(slots[0][1]).center()
+    _mouse(app, w, "press", c)
+    _mouse(app, w, "move", c + QPointF(0, -20))               # auto-rotated photo in a portrait cell: only vertical room
+    assert w._pan is not None and w.layout_.images[0].vpan != 0.5 and w.layout_.images[0].hpan == 0.5
+    _mouse(app, w, "release", c + QPointF(0, -20))
+
+
+def _carousel_window(app, tmp_path, n=4):
+    w = _ready_window(app, tmp_path, n)
+    w.kind.setCurrentText("Carousel")
+    t = __import__("time").time() + 5
+    while __import__("time").time() < t and not w._slots_now():
+        app.processEvents()
+    return w
+
+
+def _carousel_points(w):
+    """Wedge centres and seams, as widget points. Wedge i spans 90 degrees clockwise from 'up' (45 + 90*i at its middle)."""
+    import math
+
+    from photosheet.core.geometry import Rect
+    p = w.layout_.page
+    cx, cy, r = p.left + p.imageable_w / 2, p.top + p.imageable_h / 2, min(p.imageable_w, p.imageable_h) / 2
+    at_angle = lambda deg, f=0.5: w._slot_rect(Rect(cx + r * f * math.sin(math.radians(deg)),
+                                                    cy - r * f * math.cos(math.radians(deg)), 0, 0)).topLeft()
+    return at_angle
+
+
+def test_carousel_hit_test_uses_wedges_and_the_top_wedge_wins_in_overlaps(app, tmp_path):
+    from photosheet.core.geometry import Rect
+    w = _carousel_window(app, tmp_path)
+    assert w.layout_.segments == 4 and len(w.layout_.images) == 4
+    ang = _carousel_points(w)
+    for i in range(4):
+        assert w._slot_at(ang(45 + 90 * i))[0] == i             # the middle of each wedge picks that wedge
+    # at every seam two wedges overlap (30 degrees); the odd wedge is painted last, so it is the one you see and grab
+    assert [w._slot_at(ang(a))[0] for a in (0, 90, 180, 270)] == [3, 1, 1, 3]
+    assert w._slot_at(w._slot_rect(Rect(2, 2, 0, 0)).topLeft()) is None   # the page corner is in no wedge
+
+
+def test_carousel_drag_swaps_wedges_and_pans_the_photo(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = _carousel_window(app, tmp_path)
+    ang = _carousel_points(w)
+    names = lambda: [i.path[-5:] for i in w.layout_.images]
+    a, c = ang(45), ang(225)                                  # wedge 0 -> wedge 2
+    shift = Qt.KeyboardModifier.ShiftModifier
+    _mouse(app, w, "press", a, shift)
+    _mouse(app, w, "move", c, shift)
+    assert [type(s).__name__ for s, _ in w.preview.overlay] == ["QPolygonF", "QPolygonF"]   # wedge-shaped feedback
+    _mouse(app, w, "release", c, shift)
+    assert names() == ["2.png", "1.png", "0.png", "3.png"]    # wedges 0 and 2 swapped
+    item = w.layout_.images[1]                                # no crop checkbox needed: a Carousel always crops
+    before = (item.hpan, item.vpan)
+    s = ang(135)
+    _mouse(app, w, "press", s)
+    _mouse(app, w, "move", s + QPointF(-25, -25))
+    _mouse(app, w, "move", s + QPointF(-60, -60))
+    assert w._pan is not None and (item.hpan, item.vpan) != before
+    _mouse(app, w, "release", s + QPointF(-60, -60))
+    assert w.undo_act.text() == "Undo Reposition Photo"

@@ -4,8 +4,8 @@ from __future__ import annotations
 import copy
 
 from PIL import Image
-from PySide6.QtCore import QEvent, QObject, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QFont, QPixmap, QUndoCommand, QUndoStack
+from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
@@ -14,8 +14,8 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import preset
-from ..core.geometry import PageExtent
-from ..core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Passport, Poster, Single, Strip
+from ..core.geometry import PageExtent, Rect, crop_overflow
+from ..core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Passport, Poster, Single, Strip, aspect
 from ..core.render import render_page
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
@@ -138,7 +138,7 @@ class _PageLabel(QLabel):
 
     def __init__(self):
         super().__init__(alignment=Qt.AlignmentFlag.AlignCenter)
-        self.overlay: list[tuple[QRectF, str]] = []   # ("src" dims the picked photo, "dst" outlines the target)
+        self.overlay: list[tuple[QRectF | QPolygonF, str]] = []   # ("src" dims the picked photo, "dst" outlines the target)
         self.setMouseTracking(True)
 
     def paintEvent(self, e):
@@ -148,14 +148,16 @@ class _PageLabel(QLabel):
         p = QPainter(self)
         hl = self.palette().color(QPalette.ColorRole.Highlight)
         for rect, kind in self.overlay:
+            poly = isinstance(rect, QPolygonF)
             if kind == "src":
-                p.fillRect(rect, QColor(0, 0, 0, 90))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(0, 0, 0, 90))
             else:
                 fill = QColor(hl)
                 fill.setAlpha(70)
                 p.setPen(QPen(hl, 3))
                 p.setBrush(fill)
-                p.drawRect(rect)
+            p.drawPolygon(rect) if poly else p.drawRect(rect)
         p.end()
 
 
@@ -178,6 +180,8 @@ class MainWindow(QMainWindow):
         self.preview.setAccessibleName("Page preview")
         self.preview.installEventFilter(self)
         self._press, self._dragging, self._drop = None, False, None   # page drag-and-drop state
+        self._pan = None   # photo being repositioned inside its frame
+        self._pan_timer = QTimer(self, singleShot=True, interval=30, timeout=self.refresh)   # coalesce live re-renders
         self.zoom: float | None = None   # None = fit to window
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.preview)
@@ -253,6 +257,7 @@ class MainWindow(QMainWindow):
         # Delete only fires while the list has focus, so it can't eat a keystroke in a spin box.
         self.remove_act.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         self.list.addAction(self.remove_act)
+        act(e, "Center Photo in Frame", self._center_photo)
         v = self.menuBar().addMenu("&View")
         v.addAction(self.layout_dock.toggleViewAction())
         v.addAction(self.image_dock.toggleViewAction())
@@ -297,6 +302,8 @@ class MainWindow(QMainWindow):
         self.frames = self._spin(1, 12, 4)
         self.strip_w, self.strip_h = self._dspin(20, 400, 51), self._dspin(40, 600, 152)
         self.crop = QCheckBox("Crop all images to fill")
+        self.crop.setToolTip("With this on, drag a photo on the page to reposition it inside its frame.\n"
+                             "Hold Shift while dragging to swap two photos instead.")
         form = QFormLayout()
         self.rowsof = {}
         for key, label, w in [
@@ -624,8 +631,41 @@ class MainWindow(QMainWindow):
         except IndexError:
             return []
 
+    def _carousel_shapes(self):
+        """{image index: wedge polygon in widget coordinates}, plus the order the wedges are painted in."""
+        z = self.zoom if self.zoom is not None else self._fit_zoom()
+        k = self.SCREEN_DPI * z / 72
+        origin = self._slot_rect(Rect(0, 0, 0, 0)).topLeft()
+        wedges = self.layout_.wedges()
+        shapes = {i: QPolygonF([QPointF(origin.x() + x * k, origin.y() + y * k) for x, y in poly])
+                  for i, (_, poly, _) in enumerate(wedges)}
+        return shapes, [*range(0, len(wedges), 2), *range(1, len(wedges), 2)]   # evens first, odds on top
+
+    def _shape(self, idx, rect):
+        """What to draw/test for a slot: the wedge for a Carousel, otherwise its rectangle."""
+        if isinstance(self.layout_, Carousel):
+            return self._carousel_shapes()[0][idx]
+        return self._slot_rect(rect)
+
     def _slot_at(self, pos):
-        return next(((i, r) for i, r in reversed(self._slots_now()) if self._slot_rect(r).contains(pos)), None)
+        slots = self._slots_now()
+        if isinstance(self.layout_, Carousel) and slots:
+            # wedges overlap: the one painted last (on top) wins, like what the user sees
+            shapes, paint_order = self._carousel_shapes()
+            by_idx = dict(slots)
+            for i in reversed(paint_order):
+                if i in by_idx and shapes[i].containsPoint(pos, Qt.FillRule.OddEvenFill):
+                    return i, by_idx[i]
+            return None
+        return next(((i, r) for i, r in reversed(slots) if self._slot_rect(r).contains(pos)), None)
+
+    def _center_photo(self):
+        it = self._selected()
+        if it and (it.hpan, it.vpan) != (0.5, 0.5):
+            def change():
+                it.hpan = it.vpan = 0.5
+            self._edit("Center Photo", change)
+            self.refresh()
 
     def _swap_images(self, i, j):
         def change():
@@ -636,16 +676,62 @@ class MainWindow(QMainWindow):
         self.list.setCurrentRow(j)   # the photo you moved stays selected
         self.refresh()
 
+    def _start_pan(self, hit, pos):
+        """Begin repositioning the photo under the cursor, if it is cropped and has room to move."""
+        idx, rect = hit
+        item = self.layout_.images[idx]
+        carousel = isinstance(self.layout_, Carousel)   # a Carousel always crops, and never rotates
+        if not (item.crop or carousel) or isinstance(self.layout_, Poster):
+            return None
+        a = aspect(item)
+        ox, oy = crop_overflow(a * 1000, 1000, rect, 0 if carousel else item.rotation)
+        if ox < 0.5 and oy < 0.5:
+            return None
+        z = self.zoom if self.zoom is not None else self._fit_zoom()
+        return dict(idx=idx, item=item, start=pos, h0=item.hpan, v0=item.vpan, ox=ox, oy=oy,
+                    k=self.SCREEN_DPI * z / 72, before=copy.deepcopy(self.layout_.images), moved=False)
+
+    def _pan_to(self, pos):
+        pn = self._pan
+        d = pos - pn["start"]
+        pn["moved"] = True
+        it = pn["item"]
+        # dragging the photo right shows more of its left side, so the crop offset goes down
+        if pn["ox"] >= 0.5:
+            it.hpan = min(1.0, max(0.0, pn["h0"] - d.x() / pn["k"] / pn["ox"]))
+        if pn["oy"] >= 0.5:
+            it.vpan = min(1.0, max(0.0, pn["v0"] - d.y() / pn["k"] / pn["oy"]))
+        if not self._pan_timer.isActive():
+            self._pan_timer.start()
+
+    def _end_pan(self):
+        pn, self._pan = self._pan, None
+        self.preview.setCursor(Qt.CursorShape.ArrowCursor)
+        if not pn["moved"]:
+            self.list.setCurrentRow(pn["idx"])   # a plain click selects the photo
+        elif (pn["item"].hpan, pn["item"].vpan) != (pn["h0"], pn["v0"]):
+            self.undo_stack.push(_Edit(self, "Reposition Photo", pn["before"], copy.deepcopy(self.layout_.images)))
+            self.refresh()
+
     def _page_mouse(self, ev) -> bool:
-        if isinstance(self.layout_, (Carousel, Poster, Passport)):  # overlapping wedges / one tiled image / one photo in many slots
-            return False
         t, left = ev.type(), Qt.MouseButton.LeftButton
+        swap_ok = not isinstance(self.layout_, (Poster, Passport))   # one tiled image / one photo in many slots
         if t == QEvent.Type.MouseButtonPress and ev.button() == left:
             hit = self._slot_at(ev.position())
-            self._press = (hit, ev.position()) if hit else None
+            self._press, self._pan = None, None
+            if hit:
+                shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                self._pan = None if shift else self._start_pan(hit, ev.position())
+                if not self._pan and swap_ok:
+                    self._press = (hit, ev.position())
             return False
         if t == QEvent.Type.MouseMove:
-            if self._press and ev.buttons() & left:
+            if self._pan and ev.buttons() & left:
+                if self._pan["moved"] or (ev.position() - self._pan["start"]).manhattanLength() >= QApplication.startDragDistance():
+                    self.preview.setCursor(Qt.CursorShape.SizeAllCursor)
+                    self._pan_to(ev.position())
+                return True
+            if self._press and ev.buttons() & left and swap_ok:
                 (src, src_rect), start = self._press
                 if (ev.position() - start).manhattanLength() >= QApplication.startDragDistance():
                     self._dragging = True
@@ -653,9 +739,9 @@ class MainWindow(QMainWindow):
                 if self._dragging:
                     hit = self._slot_at(ev.position())
                     self._drop = hit[0] if hit and hit[0] != src else None
-                    self.preview.overlay = [(self._slot_rect(src_rect), "src")]
+                    self.preview.overlay = [(self._shape(src, src_rect), "src")]
                     if self._drop is not None:
-                        self.preview.overlay.append((self._slot_rect(hit[1]), "dst"))
+                        self.preview.overlay.append((self._shape(hit[0], hit[1]), "dst"))
                     self.preview.update()
                     return True
             elif not ev.buttons():
@@ -663,6 +749,9 @@ class MainWindow(QMainWindow):
                                        else Qt.CursorShape.ArrowCursor)
             return False
         if t == QEvent.Type.MouseButtonRelease and ev.button() == left:
+            if self._pan:
+                self._end_pan()
+                return True
             press, dragging, drop = self._press, self._dragging, self._drop
             self._press, self._dragging, self._drop = None, False, None
             self.preview.overlay = []
