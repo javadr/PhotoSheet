@@ -888,3 +888,22 @@ def test_timeline_alternates_sides_keeps_order_and_captions_with_dates(tmp_path)
     for bad in (dict(photos=0), dict(photos=13), dict(gutter=-1)):
         with pytest.raises(ValueError):
             Timeline(**bad)
+
+
+def test_checker():
+    from photosheet.core.geometry import PageExtent
+    from photosheet.core.layouts import Checker, ImageItem
+    c = Checker(page=PageExtent(400, 400), columns=4, rows=4, gutter=0)
+    assert c.per_page == 8 and len(c.shapes(0)) == 8
+    c.images = [ImageItem(f"{i}.jpg") for i in range(9)]
+    assert c.pages == 2 and len(c.slots(1)) == 1
+    assert Checker(columns=1, rows=1).per_page == 1
+    e = Checker(page=PageExtent(400, 400), columns=3, rows=3, first_empty=True)
+    assert e.per_page == 4 and e.slots(0) == [] and len(e.shapes(0)) == 5
+    e.images = [ImageItem("a.jpg")]
+    assert e.slots(0)[0][1] == Checker(page=PageExtent(400, 400), columns=3, rows=3).shapes(0)[0][1]
+    try:
+        Checker(columns=0)
+        raise AssertionError
+    except ValueError:
+        pass

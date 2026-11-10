@@ -1665,3 +1665,37 @@ class Timeline(Layout):
             out.append(("rect", box(u - 0.5, v0, 1, g + 6), line))                   # the tick from the line to its photo
         out += [("ellipse", box(u - 5, mid - 5, 10, 10), dot) for u in us]
         return out
+
+
+@dataclass
+class Checker(Layout):
+    """A chessboard: photos on every other square, the rest filled with a pale tint. `first_empty` swaps them."""
+    columns: int = 4
+    rows: int = 4
+    gutter: float = 0.0
+    first_empty: bool = False   # start the pattern on the second square: the first cell is a tint
+
+    def __post_init__(self):
+        if self.columns < 1 or self.rows < 1 or self.gutter < 0:
+            raise ValueError("columns and rows must be >= 1 and gutter >= 0")
+
+    def _cells(self, parity: int) -> list[Rect]:
+        p, g, c, r = self.page, self.gutter, self.columns, self.rows
+        tw, th = (p.imageable_w - g * (c - 1)) / c, (p.imageable_h - g * (r - 1)) / r
+        return [Rect(p.left + col * (tw + g), p.top + row * (th + g), tw, th)
+                for row in range(r) for col in range(c) if (row + col) % 2 == parity ^ self.first_empty]
+
+    @property
+    def per_page(self) -> int:
+        return len(self._cells(0))
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.per_page))
+
+    def slots(self, page: int):
+        rects = self._cells(0)
+        return list(zip(self.images[page * len(rects):(page + 1) * len(rects)], rects))
+
+    def shapes(self, page: int):
+        return [("rect", r, (232, 232, 236)) for r in self._cells(1)]
