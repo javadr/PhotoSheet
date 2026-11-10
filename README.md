@@ -54,6 +54,14 @@ photosheet              # start the app
 
 Without installing, run it straight from the source tree: `make run`.
 
+**Standalone downloads** (no Python needed) are attached to each [release](../../releases) when a `v*` tag is pushed:
+
+| Platform | File |
+|---|---|
+| Windows | `photosheet-vX.Y.Z.exe` |
+| Linux | `photosheet-vX.Y.Z` (built on a recent Ubuntu, so it needs a similarly recent distribution) |
+| macOS | `photosheet-vX.Y.Z-macos.zip`, an Apple-silicon app that is not code-signed: right-click it and choose Open the first time |
+
 ## Command line
 
 Render a sheet without opening the window:

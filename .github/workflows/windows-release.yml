@@ -1,0 +1,62 @@
+name: Build the Windows executable
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+  release:
+    types: [released]
+
+env:
+  PYTHON_VERSION: '3.12'
+
+# Writing release assets is the only privilege needed.
+permissions:
+  contents: write
+
+jobs:
+  win-build-and-deploy:
+    runs-on: windows-latest
+    steps:
+    - name: 'Checkout GitHub Action'
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+    - name: Setup Python ${{ env.PYTHON_VERSION }} Environment
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: 'Install PhotoSheet and PyInstaller'
+      shell: pwsh
+      run: |
+        python -m pip install --upgrade pip
+        pip install . pyinstaller
+
+    - name: 'Use PyInstaller to build the executable'
+      shell: pwsh
+      run: ./.github/build.ps1
+
+    - name: 'Upload artifacts'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: photosheet-windows
+        path: dist/
+
+    - name: 'Extract tag message'
+      if: startsWith(github.ref, 'refs/tags/')
+      shell: bash
+      run: |
+        : > /tmp/release_body.md
+        if git tag -l "${{ github.ref_name }}" | grep -q .; then
+          git tag -l --format='%(contents)' "${{ github.ref_name }}" > /tmp/release_body.md
+        fi
+
+    - name: 'Automatic release'
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: "softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228" # v3.0.2
+      with:
+        token: "${{ secrets.GITHUB_TOKEN }}"
+        body_path: /tmp/release_body.md
+        files: |
+          dist/*.exe

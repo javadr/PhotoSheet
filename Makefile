@@ -70,9 +70,11 @@ setup: ver ## Build source and wheel distribution packages
 	$(BUILD_TOOL)
 
 .PHONY: compile-pyinstaller
-compile-pyinstaller: ver ## Build a standalone binary with PyInstaller
-	pyinstaller --onefile --windowed --clean --noupx -i src/icons/photosheet.ico \
-	--add-data src/icons:photosheet/icons src/__main__.py -n photosheet-v$(VER)
+compile-pyinstaller: ver ## Build a standalone binary with PyInstaller (in a throwaway venv, Linux)
+	python -m venv .build-venv
+	.build-venv/bin/pip install -q . pyinstaller
+	PATH="$(CURDIR)/.build-venv/bin:$$PATH" ./.github/build.sh
+	rm -rf .build-venv
 	ls -lh dist
 
 clean: ver ## Clean build artifacts

@@ -250,3 +250,11 @@ def test_cli_new_layouts_and_presets_roundtrip(red, tmp_path):
         preset.save(lay, f)
         back = preset.load(f)
         assert type(back) is type(lay) and back == lay                       # tuples/lists survive the JSON round trip
+
+
+def test_banner_does_not_crash_when_there_is_no_stdout(monkeypatch):
+    import sys
+
+    from photosheet.banner import print_banner
+    monkeypatch.setattr(sys, "stdout", None)     # what a windowed Windows executable has
+    print_banner()                                # must simply do nothing

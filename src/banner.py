@@ -23,6 +23,10 @@ def _mix(t: float) -> str:
 
 def print_banner(console=None) -> None:
     """Print the name in a colour gradient, then the version. rich drops the colour when output is not a terminal."""
+    import sys
+
+    if console is None and sys.stdout is None:   # a windowed (no console) Windows build has no stdout at all
+        return
     from rich.console import Console
     from rich.text import Text
 
