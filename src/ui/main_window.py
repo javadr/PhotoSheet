@@ -10,7 +10,7 @@ from PySide6.QtCore import QSize, QEvent, QObject, QPointF, QRectF, QRunnable, Q
 from PySide6.QtGui import QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
     QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox,
     QFrame, QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
@@ -674,15 +674,30 @@ class MainWindow(QMainWindow):
         self.gamma = QDoubleSpinBox(minimum=0.1, maximum=5, singleStep=0.1, value=1.0)
         self.temp = self._spin(-2000, 2000, 0)
         self.sharp = QDoubleSpinBox(minimum=0, maximum=5, singleStep=0.1, value=0)
-        self.gray = QCheckBox("Desaturate")
+        self.gray, self.auto = QCheckBox("Desaturate"), QCheckBox("Auto contrast")
         self.fliph, self.flipv = QCheckBox("Flip horizontal"), QCheckBox("Flip vertical")
+        self.angle = QDoubleSpinBox(minimum=-180, maximum=180, decimals=1, singleStep=1, suffix="°", wrapping=True)
+        ccw, cw = QPushButton("⟲ 90°"), QPushButton("⟳ 90°")
+        for b, d in ((ccw, -90), (cw, 90)):
+            b.clicked.connect(lambda _=False, d=d: self.angle.setValue((self.angle.value() + d + 180) % 360 - 180))
         self.fx_hint = QLabel("Select an image to adjust it.")
-        self.fx_widgets = [self.gamma, self.temp, self.sharp, self.gray, self.fliph, self.flipv]
+        self.fx_widgets = [self.gamma, self.temp, self.sharp, self.angle, ccw, cw, self.gray, self.auto, self.fliph, self.flipv]
         form = QFormLayout()
         for label, w in [("Gamma", self.gamma), ("Warm/Cool", self.temp), ("Sharpen", self.sharp),
-                         ("", self.gray), ("", self.fliph), ("", self.flipv)]:
+                         ("Rotate", self.angle)]:
             form.addRow(label, w)
-            (getattr(w, "toggled", None) or w.valueChanged).connect(self._effects_changed)
+            w.valueChanged.connect(self._effects_changed)
+        turn = QHBoxLayout()
+        turn.addWidget(ccw)
+        turn.addWidget(cw)
+        form.addRow("", turn)
+        checks = QGridLayout()   # flips share the left column, tone effects the right
+        for r, (a, b) in enumerate(((self.fliph, self.gray), (self.flipv, self.auto))):
+            checks.addWidget(a, r, 0)
+            checks.addWidget(b, r, 1)
+            a.toggled.connect(self._effects_changed)
+            b.toggled.connect(self._effects_changed)
+        form.addRow(checks)
         row = QHBoxLayout()
         row.addWidget(add)
         row.addWidget(rem)
@@ -1118,6 +1133,8 @@ class MainWindow(QMainWindow):
         self.temp.setValue(fx.get("Temperature", {}).get("change", 0))
         self.sharp.setValue(fx.get("UnsharpMask", {}).get("amount", 0))
         self.gray.setChecked("Desaturate" in fx)
+        self.auto.setChecked("Autocontrast" in fx)
+        self.angle.setValue(it.angle if it else 0)
         self.fliph.setChecked(bool(it and it.flip_h))
         self.flipv.setChecked(bool(it and it.flip_v))
         for w in self.fx_widgets:
@@ -1138,8 +1155,11 @@ class MainWindow(QMainWindow):
             fx.append(("UnsharpMask", {"radius": 3.0, "amount": self.sharp.value()}))
         if self.gray.isChecked():
             fx.append(("Desaturate", {}))
+        if self.auto.isChecked():
+            fx.append(("Autocontrast", {}))
         def change():
             it.effects, it.flip_h, it.flip_v = fx, self.fliph.isChecked(), self.flipv.isChecked()
+            it.angle = self.angle.value()
         self._edit("Adjust Image", change, merge=True)
         self.refresh()
 
@@ -1270,7 +1290,7 @@ class MainWindow(QMainWindow):
         if not (item.crop or carousel) or isinstance(self.layout_, (Poster, Triptych, Collage)):
             return None
         a = aspect(item)
-        ox, oy = crop_overflow(a * 1000, 1000, rect, 0 if carousel else item.rotation)
+        ox, oy = crop_overflow(a * 1000, 1000, rect, 0 if carousel else item.turn(rect.w, rect.h))
         if ox < 0.5 and oy < 0.5:
             return None
         z = self.zoom if self.zoom is not None else self._fit_zoom()

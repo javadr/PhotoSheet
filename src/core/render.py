@@ -44,7 +44,7 @@ def load(item: ImageItem, printer_profile: str | None = None, proxy: bool = Fals
         mtime = os.stat(item.path).st_mtime_ns
     except OSError:
         mtime = 0  # _load raises the real error
-    key = (item.path, mtime, item.profile, item.intent, item.flip_h, item.flip_v,
+    key = (item.path, mtime, item.profile, item.intent, item.flip_h, item.flip_v, item.angle,
            repr(item.effects), printer_profile, proxy)
     with _CACHE_LOCK:
         if key in _CACHE:
@@ -86,6 +86,10 @@ def _load(item: ImageItem, printer_profile: str | None = None) -> Image.Image:
     if item.flip_v:
         im = ImageOps.flip(im)
     im = apply_effects(im, item.effects)
+    if item.angle:
+        alpha = alpha or Image.new("L", im.size, 255)
+        im = im.rotate(-item.angle, Image.BICUBIC, expand=True)  # PIL turns counter-clockwise
+        alpha = alpha.rotate(-item.angle, Image.BICUBIC, expand=True)
     if alpha:
         im.putalpha(alpha)
     return im
@@ -138,7 +142,7 @@ def _place_cut(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect
 
 def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s: float,
            fast: bool = False, shape: str | None = None) -> None:
-    f = fit(im.width, im.height, slot.scaled(s), item.crop, Rotation(item.rotation), item.hpan, item.vpan)
+    f = fit(im.width, im.height, slot.scaled(s), item.crop, Rotation(item.turn(slot.w, slot.h)), item.hpan, item.vpan)
     if f.rotation:
         im = im.rotate(-f.rotation, expand=True)  # PIL rotates counter-clockwise
     size = (max(1, f.width), max(1, f.height))

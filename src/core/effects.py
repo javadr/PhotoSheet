@@ -33,7 +33,11 @@ def unsharp(im: Image.Image, radius: float = 3.0, amount: float = 1.5) -> Image.
     return im.filter(ImageFilter.UnsharpMask(radius=radius, percent=int(amount * 100), threshold=0))
 
 
-EFFECTS = {"Gamma": gamma, "Desaturate": desaturate, "Temperature": temperature, "UnsharpMask": unsharp}
+def autocontrast(im: Image.Image) -> Image.Image:
+    return ImageOps.autocontrast(im, cutoff=1)
+
+
+EFFECTS = {"Autocontrast": autocontrast, "Gamma": gamma, "Desaturate": desaturate, "Temperature": temperature, "UnsharpMask": unsharp}
 
 
 def apply_effects(im: Image.Image, effects: list) -> Image.Image:

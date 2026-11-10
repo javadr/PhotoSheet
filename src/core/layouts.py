@@ -6,7 +6,7 @@ import datetime
 import math
 import os
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
 from .geometry import PageExtent, Rect, ceil_div
@@ -19,6 +19,7 @@ class ImageItem:
     rotation: int = -1          # Rotation enum value
     flip_h: bool = False
     flip_v: bool = False
+    angle: float = 0.0          # free rotation in degrees, clockwise; corners turn transparent
     hpan: float = 0.5
     vpan: float = 0.5
     scale: float = 100.0        # Single layout only: percent of native size
@@ -27,6 +28,12 @@ class ImageItem:
     mask: str | None = None     # border mask image; black areas hide the photo
     effects: list = field(default_factory=list)  # [(name, {params}), ...] in order
     box: tuple | None = None    # Collage only: (x, y, w, h) in points; None = not placed yet
+
+    def turn(self, slot_w: float, slot_h: float) -> int:
+        """Rotation enum for fitting. Auto is decided on the photo before the hand rotation, which then adds to it."""
+        if self.angle and self.rotation == -1:
+            return 90 if (aspect(replace(self, angle=0)) > 1) != (slot_w > slot_h) else 0
+        return self.rotation
 
 
 def corner_ticks(r: Rect, length: float = 5.0, gap: float = 1.0) -> list[tuple[float, float, float, float]]:
@@ -239,7 +246,9 @@ def aspect(item: ImageItem) -> float:
     """Width / height of the image as it will be drawn. Unreadable files count as square so layout never crashes."""
     try:
         w, h = _size(item.path, os.stat(item.path).st_mtime_ns)
-        return w / h
+        t = math.radians(item.angle)
+        c, s = abs(math.cos(t)), abs(math.sin(t))
+        return (w * c + h * s) / (w * s + h * c)
     except Exception:
         return 1.0
 
