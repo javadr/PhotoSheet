@@ -924,3 +924,10 @@ def test_stairs_steps_diagonally_inside_the_page():
     assert q[0].x < q[2].x and q[0].y > q[2].y and q[0].y == r[2].y and q[2].y == r[0].y   # mirrored top to bottom
     with pytest.raises(ValueError):
         Stairs(photos=0)
+
+
+def test_pyramid_and_diamond_counts():
+    from photosheet.core.layouts import Diamond, Pyramid
+    assert Pyramid(page=PageExtent(300, 300), rows=4).per_page == 10
+    d = Diamond(page=PageExtent(300, 300), rows=5)
+    assert d.per_page == 9 and all(r.x >= 0 and r.x + r.w <= 300 for r in d._rects())

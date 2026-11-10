@@ -60,6 +60,8 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 | **Brick** | Brickwork that fills the page edge to edge: every other row is shifted half a tile and starts and ends with a half-width photo. Starts at 5 × 5 on landscape paper (change the Orientation, or use `--portrait`). |
 | **Timeline** | Photos alternate either side of a line, each with its date from the photo's own data. Use Edit ▸ Sort Photos by Date to put them in order. |
 | **Checker** | A chessboard: photos on every other square, the rest filled with a pale tint. Rows, columns and gutter are set in the Layout panel; tick *First cell empty* to start the pattern on the second square. |
+| **Pyramid** | Rows of 1, 2, 3 ... photos, each row centred, forming a triangle. Set the row count in the Layout panel. |
+| **Diamond** | Rows widen to the middle, then narrow again (1, 2, 3, 2, 1 for 5 rows). |
 | **Stairs** | Photos step down the page from top left to bottom right, each overlapping the one before. Set the photos per page in the Layout panel; tick *Climb to the top right* to start at the bottom left and step up. |
 
 **Working with the page**

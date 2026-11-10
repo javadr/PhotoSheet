@@ -1086,7 +1086,7 @@ def test_layout_menu_is_grouped_headings_cannot_be_picked_and_every_layout_is_li
     rows = [(model.item(i).text(), bool(model.item(i).flags() & Qt.ItemFlag.ItemIsEnabled)) for i in range(model.rowCount())]
     headings = [t for t, ok in rows if not ok]
     assert headings == [g for g, _ in KIND_GROUPS]                                     # five headings, none selectable
-    assert sorted(t for t, ok in rows if ok) == sorted(KINDS) and len(KINDS) == 30   # every layout is under exactly one heading
+    assert sorted(t for t, ok in rows if ok) == sorted(KINDS) and len(KINDS) == 32   # every layout is under exactly one heading
     assert w.kind.currentText() == "N-up" and bool(model.item(w.kind.currentIndex()).flags() & Qt.ItemFlag.ItemIsEnabled)
     # the order on screen is heading, its layouts, next heading...
     expect = [x for g, names in KIND_GROUPS for x in (g, *names)]

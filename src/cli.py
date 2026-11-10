@@ -8,7 +8,7 @@ import sys
 from .core.geometry import PageExtent
 from .core.layouts import (BENTO, MM, RECIPES, SHAPE_NAMES, Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip,
                            FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic, NUp, Package, Passport,
-                           Brick, Checker, Fan, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs, Strip,
+                           Brick, Checker, Diamond, Pyramid, Fan, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs, Strip,
                            Timeline, Triptych)
 from .core.render import render_all
 
@@ -80,6 +80,8 @@ def build(args) -> NUp | Single | Poster:
     elif args.layout == "checker":
         lay = Checker(page=page, gutter=args.gutter, first_empty=args.first_empty, **({} if args.rows is None else {"rows": args.rows}),
                       **({} if args.cols is None else {"columns": args.cols}))
+    elif args.layout in ("pyramid", "diamond"):
+        lay = {"pyramid": Pyramid, "diamond": Diamond}[args.layout](page=page, gutter=args.gutter, **({} if args.rows is None else {"rows": args.rows}))
     elif args.layout == "brick":
         lay = Brick(page=page, gutter=args.gutter, **({} if args.rows is None else {"rows": args.rows}),
                     **({} if args.cols is None else {"columns": max(2, args.cols)}))
@@ -118,7 +120,7 @@ def main(argv=None) -> int:
     ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic", "strip", "passport", "polaroid", "triptych", "package",
                                                        "collage", "framed", "badges", "feature", "filmstrip", "bento", "spiral",
                                                        "honeycomb", "calendar", "masonry", "shapes", "ring", "scatter", "slant", "fan", "timeline",
-                                                       "brick", "checker", "stairs"], default="nup")
+                                                       "brick", "checker", "stairs", "pyramid", "diamond"], default="nup")
     ap.add_argument("--rows", type=int, help="grid rows (default: 3, Shapes 3, Brick 6)")
     ap.add_argument("--cols", type=int, help="grid columns (default: 3, Shapes 2, Masonry 3, Brick 6)")
     ap.add_argument("--segments", type=int, default=4)

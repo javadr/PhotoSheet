@@ -1726,3 +1726,43 @@ class Stairs(Layout):
         w, h = p.imageable_w / k, p.imageable_h / k
         return [(item, Rect(p.left + i * 0.65 * w, p.top + ((n - 1 - i) if self.rising else i) * 0.65 * h, w, h))
                 for i, item in enumerate(self.images[page * n:(page + 1) * n])]
+
+
+@dataclass
+class Pyramid(Layout):
+    """Rows of 1, 2, 3 ... photos stacked into a triangle, each row centred. A Diamond widens, then narrows again."""
+    rows: int = 4
+    gutter: float = 6.0
+
+    def __post_init__(self):
+        if self.rows < 1 or self.gutter < 0:
+            raise ValueError("rows must be >= 1 and gutter >= 0")
+
+    def _counts(self) -> list[int]:
+        return list(range(1, self.rows + 1))
+
+    def _rects(self) -> list[Rect]:
+        p, g, counts = self.page, self.gutter, self._counts()
+        n = max(counts)
+        tw, th = (p.imageable_w - g * (n - 1)) / n, (p.imageable_h - g * (self.rows - 1)) / self.rows
+        return [Rect(p.left + (p.imageable_w - c * tw - (c - 1) * g) / 2 + k * (tw + g), p.top + row * (th + g), tw, th)
+                for row, c in enumerate(counts) for k in range(c)]
+
+    @property
+    def per_page(self) -> int:
+        return sum(self._counts())
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.per_page))
+
+    def slots(self, page: int):
+        rects, n = self._rects(), self.per_page
+        return list(zip(self.images[page * n:(page + 1) * n], rects))
+
+
+@dataclass
+class Diamond(Pyramid):
+    """Rows of 1, 2 ... up to the middle row, then back down to 1: a diamond of photos."""
+    def _counts(self) -> list[int]:
+        return [min(i, self.rows - 1 - i) + 1 for i in range(self.rows)]

@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from .. import __version__
 from ..core import preset
 from ..core.geometry import PageExtent, Rect, crop_overflow
-from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Brick, Calendar, Carousel, Checker, Collage,
+from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Brick, Calendar, Carousel, Checker, Collage, Diamond, Pyramid,
                             Fan, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic,
                             NUp, Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs,
                             Strip, Timeline, Triptych, aspect, date_sort_key, snap_delta)
@@ -37,17 +37,19 @@ KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
          "Badges": Badges, "Feature": Feature, "Film strip": Filmstrip, "Bento": Bento,
          "Golden spiral": Spiral, "Honeycomb": Honeycomb, "Calendar": Calendar, "Masonry": Masonry,
          "Shapes": Shapes, "Ring": Ring, "Scatter": Scatter, "Slant": Slant, "Fan": Fan, "Brick": Brick,
-         "Timeline": Timeline, "Checker": Checker, "Stairs": Stairs}
+         "Timeline": Timeline, "Checker": Checker, "Stairs": Stairs,
+         "Pyramid": Pyramid, "Diamond": Diamond}
 KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "carousel",
         "Fixed size": "fixed", "Passport": "passport", "Mosaic": "mosaic", "Photo strip": "strip", "Polaroid": "polaroid",
         "Triptych": "triptych", "Package": "package", "Collage": "collage", "Framed print": "framed",
         "Badges": "badges", "Feature": "feature", "Film strip": "filmstrip", "Bento": "bento",
         "Golden spiral": "spiral", "Honeycomb": "honeycomb", "Calendar": "calendar", "Masonry": "masonry",
         "Shapes": "shapes", "Ring": "ring", "Scatter": "scatter", "Slant": "slant", "Fan": "fan", "Brick": "brick",
-        "Timeline": "timeline", "Checker": "checker", "Stairs": "stairs"}
+        "Timeline": "timeline", "Checker": "checker", "Stairs": "stairs",
+        "Pyramid": "pyramid", "Diamond": "diamond"}
 # The layout menu is long, so it is grouped (HIG: group related items, use progressive disclosure).
 KIND_GROUPS = (
-    ("Grids", ("N-up", "Single", "Mosaic", "Masonry", "Brick", "Checker", "Bento", "Feature")),
+    ("Grids", ("N-up", "Single", "Mosaic", "Masonry", "Brick", "Checker", "Pyramid", "Diamond", "Bento", "Feature")),
     ("Print sizes", ("Fixed size", "Passport", "Package", "Badges", "Photo strip", "Film strip")),
     ("Frames", ("Polaroid", "Framed print", "Triptych", "Poster")),
     ("Shapes", ("Shapes", "Honeycomb", "Ring", "Carousel", "Golden spiral")),
@@ -61,7 +63,7 @@ HANDLE = 5   # half the size of a Collage resize handle, in px
 # The grid each layout starts with: (rows, columns). Masonry only uses the columns.
 # Layouts that start on landscape paper (every other layout starts on portrait) until the user picks an orientation.
 ORIENT_DEFAULTS = {"Brick": "Landscape"}
-GRID_DEFAULTS = {"N-up": (3, 3), "Polaroid": (3, 3), "Shapes": (3, 2), "Masonry": (3, 3), "Brick": (5, 5), "Checker": (4, 4)}
+GRID_DEFAULTS = {"N-up": (3, 3), "Polaroid": (3, 3), "Shapes": (3, 2), "Masonry": (3, 3), "Brick": (5, 5), "Checker": (4, 4), "Pyramid": (4, 4), "Diamond": (5, 5)}
 DIRECTIONS = {"Automatic": "auto", "Vertical": "vertical", "Horizontal": "horizontal"}   # which way strips run
 SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
                 "Wallet 2.5 × 3.5 in": (63.5, 88.9), "4 × 6 in": (101.6, 152.4),
@@ -722,11 +724,11 @@ class MainWindow(QMainWindow):
         self.rowsof = {}
         for key, label, w in [
             ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Orientation", self.orient), ("all", "Margin (pt)", self.margin),
-            ("nup,polaroid,shapes,brick,checker", "Rows", self.rows), ("nup,polaroid,shapes,masonry,brick,checker", "Columns", self.cols),
-            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,feature,bento,spiral,honeycomb,calendar,masonry,shapes,ring,brick,checker,slant,timeline", "Gutter (pt)", self.gutter),
+            ("nup,polaroid,shapes,brick,checker,pyramid,diamond", "Rows", self.rows), ("nup,polaroid,shapes,masonry,brick,checker", "Columns", self.cols),
+            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,feature,bento,spiral,honeycomb,calendar,masonry,shapes,ring,brick,checker,pyramid,diamond,slant,timeline", "Gutter (pt)", self.gutter),
             ("nup,polaroid,framed", "Captions", self.caption),
             ("nup,fixed,passport,polaroid,package,badges,honeycomb,ring", "", self.marks),
-            ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap), ("nup,single,fixed,passport,carousel,mosaic,strip,polaroid,package,collage,framed,badges,feature,filmstrip,bento,spiral,honeycomb,calendar,masonry,shapes,ring,scatter,slant,fan,timeline,brick,checker,stairs", "Feather (pt)", self.feather),
+            ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap), ("nup,single,fixed,passport,carousel,mosaic,strip,polaroid,package,collage,framed,badges,feature,filmstrip,bento,spiral,honeycomb,calendar,masonry,shapes,ring,scatter,slant,fan,timeline,brick,checker,stairs,pyramid,diamond", "Feather (pt)", self.feather),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
             ("fixed,passport", "Print size", self.size_preset), ("fixed,passport", "Width (mm)", self.cell_w),
@@ -1039,6 +1041,8 @@ class MainWindow(QMainWindow):
         elif cls is Checker:
             kw = dict(columns=self.cols.value(), rows=self.rows.value(), gutter=self.gutter.value(),
                       first_empty=self.ck_empty.isChecked())
+        elif cls in (Pyramid, Diamond):
+            kw = dict(rows=self.rows.value(), gutter=self.gutter.value())
         elif cls is Stairs:
             kw = dict(photos=self.st_n.value(), rising=self.st_rise.isChecked())
         elif cls is Timeline:
@@ -1144,7 +1148,7 @@ class MainWindow(QMainWindow):
             self.bento.setCurrentIndex(list(BENTO).index(lay.template))
         if isinstance(lay, (Masonry, Brick, Checker)):
             self.cols.setValue(lay.columns)
-        if isinstance(lay, (Brick, Checker)):
+        if isinstance(lay, (Brick, Checker, Pyramid)):
             self.rows.setValue(lay.rows)
         if isinstance(lay, Slant):
             self.slant_panels.setValue(lay.panels)

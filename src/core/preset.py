@@ -6,7 +6,7 @@ from dataclasses import asdict, fields
 
 from .geometry import PageExtent
 from .layouts import (Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb,
-                      Brick, Checker, Fan, ImageItem, Layout, Masonry, Mosaic, NUp, Package, Passport, Polaroid, Poster, Ring,
+                      Brick, Checker, Diamond, Pyramid, Fan, ImageItem, Layout, Masonry, Mosaic, NUp, Package, Passport, Polaroid, Poster, Ring,
                       Scatter, Shapes, Single, Slant, Spiral, Stairs, Strip, Timeline, Triptych)
 
 TYPES = {"nup": NUp, "single": Single, "poster": Poster, "carousel": Carousel,
@@ -15,7 +15,8 @@ TYPES = {"nup": NUp, "single": Single, "poster": Poster, "carousel": Carousel,
          "framed": FramedPrint, "badges": Badges, "feature": Feature, "filmstrip": Filmstrip,
          "bento": Bento, "spiral": Spiral, "honeycomb": Honeycomb, "calendar": Calendar,
          "masonry": Masonry, "shapes": Shapes, "ring": Ring, "scatter": Scatter,
-         "slant": Slant, "fan": Fan, "timeline": Timeline, "brick": Brick, "checker": Checker, "stairs": Stairs}
+         "slant": Slant, "fan": Fan, "timeline": Timeline, "brick": Brick, "checker": Checker, "stairs": Stairs,
+         "pyramid": Pyramid, "diamond": Diamond}
 
 
 def kind(layout: Layout) -> str:
