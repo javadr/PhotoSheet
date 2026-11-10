@@ -20,7 +20,7 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 
 ## Screenshot
 
-PhotoSheet window
+![PhotoSheet window](https://raw.githubusercontent.com/javadr/PhotoSheet/master/docs/screenshots/app.png)
 
 ## Sample output
 
