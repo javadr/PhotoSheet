@@ -32,6 +32,10 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 | **Golden spiral** | Photos in a spiral, each taking about 62% of the space that is left. |
 | **Honeycomb** | Hexagon-shaped photos nested like a honeycomb, with optional cut lines. |
 | **Calendar** | A wall calendar: a photo above a month grid, one page per month, weekends in red. |
+| **Masonry** | Pinterest-style columns: photos keep their shape and each goes into the shortest column. |
+| **Shapes** | A grid of photos cropped to a heart, star, diamond, triangle, rounded square or circle. |
+| **Ring** | A wreath of round photos around a circle, with a bigger photo in the middle (6 or more around the ring). |
+| **Scatter** | A casual pile of tilted prints on white cards with soft shadows; the seed makes the same pile every time. |
 
 **Working with the page**
 
@@ -89,6 +93,12 @@ photosheet-cli me.jpg -o package.pdf --layout package --page 8x10 --recipe 5x7-4
 
 # A 12-month wall calendar for 2027, one photo per month
 photosheet-cli photos/*.jpg -o calendar.pdf --layout calendar --year 2027 --crop
+
+# Heart-shaped photos, 3 rows by 2 columns
+photosheet-cli photos/*.jpg -o hearts.pdf --layout shapes --shape heart --rows 3 --cols 2 --crop
+
+# A tossed pile of prints (change --seed for a different pile)
+photosheet-cli photos/*.jpg -o pile.pdf --layout scatter --scatter-photos 6 --seed 5
 
 # 32 mm badge graphics, staggered, with cut circles
 photosheet-cli photos/*.jpg -o badges.pdf --layout badges --diameter 32 --marks

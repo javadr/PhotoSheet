@@ -992,3 +992,83 @@ def test_self_test_passes_in_the_source_tree_and_reports_failures(app, tmp_path,
     monkeypatch.setattr(photosheet, "__file__", str(tmp_path / "__init__.py"))
     assert selftest.run(str(report)) == 1
     assert "FAIL  data files" in report.read_text(encoding="utf-8")
+
+
+# ---- Masonry, Shapes, Ring, Scatter ----
+
+def test_masonry_shapes_ring_scatter_keep_photos_show_controls_and_roundtrip_presets(app, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import Masonry, Ring, Scatter, Shapes
+    w = _win_with_images(tmp_path, 7)
+    w.show()
+    w.kind.setCurrentText("Masonry")
+    assert isinstance(w.layout_, Masonry) and len(w.layout_.images) == 7
+    assert w.cols.isVisible() and w.gutter.isVisible() and not w.rows.isVisible() and not w.shape_kind.isVisible()
+    w.cols.setValue(4)
+    assert w.layout_.columns == 4
+    w.kind.setCurrentText("Shapes")
+    assert isinstance(w.layout_, Shapes) and w.shape_kind.isVisible() and w.rows.isVisible() and w.cols.isVisible()
+    w.rows.setValue(2)
+    w.cols.setValue(2)
+    w.shape_kind.setCurrentText("Star")
+    assert (w.layout_.kind, w.layout_.rows, w.layout_.cols) == ("star", 2, 2) and w.layout_.pages == 2
+    assert w.per_sheet.isVisible() and w.per_sheet.text() == "2 × 2 = 4 photos"
+    w.shape_kind.setCurrentText("Rounded square")
+    assert w.layout_.kind == "rounded"
+    w.kind.setCurrentText("Ring")
+    assert isinstance(w.layout_, Ring) and w.ring_n.isVisible() and w.ring_center.isVisible() and w.marks.isVisible()
+    assert not w.shape_kind.isVisible() and "photos per page" in w.per_sheet.text()
+    assert w.layout_.photos == 8 and w.layout_.per_page == 9 and "centre needs" not in w.per_sheet.text()
+    w.ring_n.setValue(4)
+    assert "the centre needs 6 or more" in w.per_sheet.text() and w.layout_.per_page == 4        # said out loud, not silent
+    w.ring_center.setChecked(False)
+    assert "centre needs" not in w.per_sheet.text()
+    w.kind.setCurrentText("Scatter")
+    assert isinstance(w.layout_, Scatter) and w.sc_n.isVisible() and w.sc_seed.isVisible() and w.shuffle_btn.isVisible()
+    w.sc_n.setValue(3)
+    w.sc_size.setValue(30)
+    w.sc_tilt.setValue(20)
+    w.sc_border.setValue(5)
+    w.sc_seed.setValue(42)
+    lay = w.layout_
+    assert (lay.photos, lay.size, lay.tilt, lay.border, lay.seed) == (3, 0.3, 20, 5, 42) and lay.pages == 3
+    before = [(r.x, r.y) for _, r, _, _ in w.layout_.pile(0)]
+    w.shuffle_btn.click()
+    after = [(r.x, r.y) for _, r, _, _ in w.layout_.pile(0)]
+    assert w.layout_.seed == w.sc_seed.value() and (w.layout_.seed != 42 or before != after)
+    w.sc_seed.setValue(42)
+    assert [(r.x, r.y) for _, r, _, _ in w.layout_.pile(0)] == before                          # the seed brings the same pile back
+    for setup, check in (
+        (lambda: (w.kind.setCurrentText("Masonry"), w.cols.setValue(5)),
+         lambda: (w.kind.currentText(), w.cols.value()) == ("Masonry", 5)),
+        (lambda: (w.kind.setCurrentText("Shapes"), w.shape_kind.setCurrentText("Diamond"), w.rows.setValue(3), w.cols.setValue(3)),
+         lambda: (w.kind.currentText(), w.shape_kind.currentText(), w.rows.value(), w.cols.value()) == ("Shapes", "Diamond", 3, 3)),
+        (lambda: (w.kind.setCurrentText("Ring"), w.ring_n.setValue(12), w.ring_center.setChecked(False)),
+         lambda: (w.kind.currentText(), w.ring_n.value(), w.ring_center.isChecked()) == ("Ring", 12, False)),
+        (lambda: (w.kind.setCurrentText("Scatter"), w.sc_n.setValue(5), w.sc_size.setValue(60), w.sc_tilt.setValue(8), w.sc_border.setValue(11), w.sc_seed.setValue(77)),
+         lambda: (w.kind.currentText(), w.sc_n.value(), w.sc_size.value(), w.sc_tilt.value(), w.sc_border.value(), w.sc_seed.value()) == ("Scatter", 5, 60, 8, 11, 77)),
+    ):
+        setup()
+        f = str(tmp_path / "p.json")
+        preset.save(w.layout_, f)
+        w.kind.setCurrentText("N-up")
+        w.layout_ = preset.load(f)
+        w._sync_controls()
+        assert check()
+
+
+def test_page_drag_swaps_masonry_shapes_ring_and_scatter_photos(app, tmp_path):
+    w = _ready_window(app, tmp_path)
+    names = lambda: [i.path[-5:] for i in w.layout_.images]
+    for kind in ("Masonry", "Shapes", "Ring", "Scatter"):
+        w.layout_.images[:] = sorted(w.layout_.images, key=lambda i: i.path)
+        w.kind.setCurrentText(kind)
+        if kind == "Ring":
+            w.ring_n.setValue(3)                                                              # 3 photos around, no tiny centre
+        slots = dict(w._slots_now())
+        a, c = w._slot_rect(slots[0]).center(), w._slot_rect(slots[2]).center()
+        _mouse(app, w, "press", a)
+        _mouse(app, w, "move", (a + c) / 2)
+        _mouse(app, w, "move", c)
+        _mouse(app, w, "release", c)
+        assert names() == ["2.png", "1.png", "0.png"], kind

@@ -421,3 +421,86 @@ def test_captions_can_draw_accented_letters_and_calendar_names_ignore_the_system
     cal = Calendar(page=PE(595, 842), year=2027, month=3, months=1)
     caps = cal.captions(0)
     assert caps[0][0] == "March 2027" and [t for t, _, _ in caps[1:8]] == ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def test_every_shape_masks_the_photo_to_its_outline(red):
+    from photosheet.core.layouts import SHAPE_NAMES, Shapes
+    probes = {   # (x, y) as a share of the cell: (inside, outside)
+        "heart": ((.5, .5), (.5, .02)), "star": ((.5, .5), (.05, .05)), "diamond": ((.5, .5), (.08, .08)),
+        "triangle": ((.5, .75), (.08, .08)), "rounded": ((.5, .5), (.0, .0)), "circle": ((.5, .5), (.04, .04)),
+    }
+    assert set(probes) == set(SHAPE_NAMES)
+    pg = PageExtent(240, 240)
+    for kind, (inside, outside) in probes.items():
+        sh = Shapes(page=pg, rows=1, cols=1, gutter=0, kind=kind)
+        sh.add(ImageItem(red))
+        im = render_page(sh, 0, dpi=72)
+        (_, r), = sh.slots(0)
+        at = lambda f: im.getpixel((int(r.x + f[0] * r.w), int(r.y + f[1] * r.h)))
+        assert at(inside) == (255, 0, 0), kind                                         # photo shows inside the shape
+        assert at(outside) == (255, 255, 255), kind                                    # and is cut away outside it
+
+
+def test_heart_has_a_notch_at_the_top_centre_and_two_lobes():
+    from photosheet.core.render import _mask
+    m = _mask("heart", 200, 200)
+    assert m.getpixel((100, 8)) < 60                                                   # the dip between the lobes
+    assert m.getpixel((50, 25)) > 200 and m.getpixel((150, 25)) > 200                  # the two lobes are filled
+    assert m.getpixel((100, 190)) > 150                                                # the point at the bottom
+    star = _mask("star", 200, 200)
+    assert star.getpixel((100, 100)) > 200 and star.getpixel((100, 5)) > 100                                    # middle and the top tip
+    assert any(star.getpixel((x, 196)) > 100 for x in range(30, 48)) and any(star.getpixel((x, 196)) > 100 for x in range(152, 170))   # both bottom tips reach the box
+    assert star.getpixel((15, 190)) == 0 and star.getpixel((100, 190)) == 0                                     # but the gaps between them are empty
+
+
+def test_scatter_draws_cards_with_shadows_on_the_page(red, tmp_path):
+    from photosheet.core.layouts import Scatter
+    pg = PageExtent(500, 500)
+    pg.set_margins(10, 10, 10, 10)
+    sc = Scatter(page=pg, photos=3, size=0.5, tilt=15, border=12, seed=3)
+    for _ in range(3):
+        sc.add(ImageItem(red))
+    im = render_page(sc, 0, dpi=72)
+    pile = sc.pile(0)
+    top_item, top_photo, top_card, _ = pile[-1]
+    assert im.getpixel((int(top_photo.x + top_photo.w / 2), int(top_photo.y + top_photo.h / 2))) == (255, 0, 0)   # photo
+    px = im.getpixel((int(top_card.x + top_card.w / 2), int(top_card.y + top_card.h - 4)))
+    assert px != (255, 0, 0) and min(px) > 200                                                                      # white bottom edge
+    assert im.getpixel((2, 2)) == (255, 255, 255)                                                                   # page corner untouched
+    gray = sum(1 for x in range(0, 500, 3) for y in range(0, 500, 3) if im.getpixel((x, y))[0] == im.getpixel((x, y))[1] != 255 and im.getpixel((x, y))[0] < 250)
+    assert gray > 30                                                                                                # grey shadow pixels exist
+    again = render_page(sc, 0, dpi=72)
+    assert again.tobytes() == im.tobytes()                                                              # same seed, same picture
+    sc.seed = 4
+    assert render_page(sc, 0, dpi=72).tobytes() != im.tobytes()
+
+
+def test_ring_masonry_cli_and_presets(red, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import Masonry, Ring, Scatter, Shapes
+    pg = PageExtent(400, 400)
+    pg.set_margins(10, 10, 10, 10)
+    ring = Ring(page=pg, photos=8, gutter=4)
+    for _ in range(9):
+        ring.add(ImageItem(red))
+    im = render_page(ring, 0, dpi=72)
+    for r in (c for _, c in ring.slots(0)):
+        assert im.getpixel((int(r.x + r.w / 2), int(r.y + r.h / 2))) == (255, 0, 0)                 # every circle shows its photo
+    one = Ring(page=pg, photos=8, center=False, gutter=4)                                            # a lone circle: its box corners are free
+    one.add(ImageItem(red))
+    lone = render_page(one, 0, dpi=72)
+    (_, r), = one.slots(0)
+    assert lone.getpixel((int(r.x + 2), int(r.y + 2))) == (255, 255, 255)                            # round, not square
+    assert lone.getpixel((int(r.x + r.w / 2), int(r.y + r.h / 2))) == (255, 0, 0)
+    for args in (["--layout", "masonry", "--cols", "3"], ["--layout", "shapes", "--shape", "star", "--rows", "2", "--cols", "2"],
+                 ["--layout", "ring", "--ring-photos", "6", "--no-center", "--marks"], ["--layout", "ring"],
+                 ["--layout", "scatter", "--scatter-photos", "3", "--tilt", "20", "--seed", "5", "--border", "6"]):
+        out = tmp_path / "o.pdf"
+        assert cli.main([red, red, red, "-o", str(out), "--dpi", "40", *args]) == 0 and out.stat().st_size > 0
+    for lay in (Masonry(page=PageExtent(300, 300), columns=4, gutter=2), Shapes(page=PageExtent(300, 300), rows=2, cols=4, kind="diamond"),
+                Ring(page=PageExtent(300, 300), photos=11, center=False, gutter=3, marks=True),
+                Scatter(page=PageExtent(300, 300), photos=4, size=0.3, tilt=25, border=3, seed=99)):
+        f = str(tmp_path / "p.json")
+        preset.save(lay, f)
+        back = preset.load(f)
+        assert type(back) is type(lay) and back == lay

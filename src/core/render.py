@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import math
 from functools import lru_cache
 import os
 import threading
@@ -9,11 +10,11 @@ from collections import OrderedDict
 
 from dataclasses import replace
 
-from PIL import Image, ImageCms, ImageChops, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageCms, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from .effects import apply_effects
 from .geometry import Rect, Rotation, fit
-from .layouts import Carousel, ImageItem, Layout, Poster, Triptych
+from .layouts import Carousel, ImageItem, Layout, Poster, Scatter, Triptych
 
 _SRGB = None
 
@@ -90,6 +91,40 @@ def _load(item: ImageItem, printer_profile: str | None = None) -> Image.Image:
     return im
 
 
+def _unit_poly(shape: str):
+    """Outline of a polygon-like shape in a unit box (0..1 each way), or None for ellipse and rounded."""
+    if shape == "hexagon":
+        return [(.5, 0), (1, .25), (1, .75), (.5, 1), (0, .75), (0, .25)]
+    if shape == "diamond":
+        return [(.5, 0), (1, .5), (.5, 1), (0, .5)]
+    if shape == "triangle":
+        return [(.5, 0), (1, 1), (0, 1)]
+    if shape == "star":
+        pts = [((1 if i % 2 == 0 else .382) * math.cos(math.radians(-90 + 36 * i)),
+                (1 if i % 2 == 0 else .382) * math.sin(math.radians(-90 + 36 * i))) for i in range(10)]
+    elif shape == "heart":
+        pts = [(16 * math.sin(t) ** 3, -(13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t)))
+               for t in (2 * math.pi * i / 120 for i in range(120))]
+    else:
+        return None
+    x0, x1, y0, y1 = min(x for x, _ in pts), max(x for x, _ in pts), min(y for _, y in pts), max(y for _, y in pts)
+    return [((x - x0) / (x1 - x0), (y - y0) / (y1 - y0)) for x, y in pts]   # fill the whole box
+
+
+def _mask(shape: str, w: int, h: int) -> Image.Image:
+    """An 'L' mask of a shape, drawn 4x larger and shrunk for a smooth edge."""
+    W, H = w * 4, h * 4
+    m = Image.new("L", (W, H), 0)
+    d, poly = ImageDraw.Draw(m), _unit_poly(shape)
+    if poly:
+        d.polygon([(x * (W - 1), y * (H - 1)) for x, y in poly], fill=255)
+    elif shape == "rounded":
+        d.rounded_rectangle((0, 0, W - 1, H - 1), radius=min(W, H) * 0.22, fill=255)
+    else:
+        d.ellipse((0, 0, W - 1, H - 1), fill=255)
+    return m.resize((w, h), Image.LANCZOS)
+
+
 def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s: float,
            fast: bool = False, shape: str | None = None) -> None:
     f = fit(im.width, im.height, slot.scaled(s), item.crop, Rotation(item.rotation), item.hpan, item.vpan)
@@ -104,15 +139,8 @@ def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s:
     if item.mask:
         m = ImageOps.invert(Image.open(item.mask).convert("L").resize(im.size))
         im.putalpha(m)  # mask: white = hide, as the original inverted it
-    if shape:   # keep only the circle / hexagon (drawn 4x larger, then shrunk, for a smooth edge)
-        w, h = im.size
-        m = Image.new("L", (w * 4, h * 4), 0)
-        W, H = w * 4 - 1, h * 4 - 1
-        if shape == "hexagon":
-            ImageDraw.Draw(m).polygon([(W / 2, 0), (W, H / 4), (W, 3 * H / 4), (W / 2, H), (0, 3 * H / 4), (0, H / 4)], fill=255)
-        else:
-            ImageDraw.Draw(m).ellipse((0, 0, W, H), fill=255)
-        m = m.resize((w, h), Image.LANCZOS)
+    if shape:   # keep only the circle / hexagon / heart / ...
+        m = _mask(shape, *im.size)
         if im.mode == "RGBA":
             m = ImageChops.multiply(m, im.getchannel("A"))
         im = im.convert("RGB")
@@ -185,6 +213,22 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
                    round((r.x - group.x + r.w) * s), round((r.y - group.y + r.h) * s))
             canvas.paste(pic.crop(box), (round(r.x * s), round(r.y * s)))
         return canvas
+    if isinstance(layout, Scatter):
+        for item, photo, card, angle in layout.pile(page):
+            w, h = max(1, round(card.w * s)), max(1, round(card.h * s))
+            c = Image.new("RGB", (w, h), (255, 255, 255))
+            _place(c, replace(item, crop=True, rotation=0), load(item, printer_profile, fast),
+                   Rect(photo.x - card.x, photo.y - card.y, photo.w, photo.h), s, fast)
+            c = c.convert("RGBA")
+            c.putalpha(Image.new("L", (w, h), 255))
+            c = c.rotate(angle, expand=True, resample=Image.BICUBIC)
+            shadow = Image.new("RGBA", c.size, (0, 0, 0, 0))
+            shadow.putalpha(c.getchannel("A").point(lambda v: v * 90 // 255).filter(ImageFilter.GaussianBlur(max(1, 2.5 * s))))
+            x, y = round((card.x + card.w / 2) * s - c.width / 2), round((card.y + card.h / 2) * s - c.height / 2)
+            off = round(2 * s)
+            canvas.paste(shadow, (x + off, y + off + off), shadow)
+            canvas.paste(c, (x, y), c)
+        return canvas
     if isinstance(layout, Carousel):
         wedges = layout.wedges()
         for i in [*range(0, len(wedges), 2), *range(1, len(wedges), 2)]:  # evens, then odds on top
@@ -196,7 +240,7 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
             canvas.paste(tmp, mask=mask)
         return canvas
     draw = ImageDraw.Draw(canvas)
-    round_photos = layout.shape in ("ellipse", "hexagon")
+    round_photos = layout.shape != "rect"
 
     def guides():
         for x0, y0, x1, y1 in layout.cut_guides(page):

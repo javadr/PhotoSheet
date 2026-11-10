@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import datetime
+import random
 
 from PIL import Image
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
@@ -16,9 +17,10 @@ from PySide6.QtWidgets import (
 
 from ..core import preset
 from ..core.geometry import PageExtent, Rect, crop_overflow
-from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip,
-                            FixedSize, FramedPrint, Honeycomb, ImageItem, Mosaic, NUp, Package, Passport,
-                            Polaroid, Poster, Single, Spiral, Strip, Triptych, aspect, snap_delta)
+from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Calendar, Carousel, Collage,
+                            Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic, NUp,
+                            Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Spiral, Strip,
+                            Triptych, aspect, snap_delta)
 from ..core.render import render_page
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
@@ -27,12 +29,17 @@ KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
          "Fixed size": FixedSize, "Passport": Passport, "Mosaic": Mosaic, "Photo strip": Strip, "Polaroid": Polaroid,
          "Triptych": Triptych, "Package": Package, "Collage": Collage, "Framed print": FramedPrint,
          "Badges": Badges, "Feature": Feature, "Film strip": Filmstrip, "Bento": Bento,
-         "Golden spiral": Spiral, "Honeycomb": Honeycomb, "Calendar": Calendar}
+         "Golden spiral": Spiral, "Honeycomb": Honeycomb, "Calendar": Calendar, "Masonry": Masonry,
+         "Shapes": Shapes, "Ring": Ring, "Scatter": Scatter}
 KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "carousel",
         "Fixed size": "fixed", "Passport": "passport", "Mosaic": "mosaic", "Photo strip": "strip", "Polaroid": "polaroid",
         "Triptych": "triptych", "Package": "package", "Collage": "collage", "Framed print": "framed",
         "Badges": "badges", "Feature": "feature", "Film strip": "filmstrip", "Bento": "bento",
-        "Golden spiral": "spiral", "Honeycomb": "honeycomb", "Calendar": "calendar"}
+        "Golden spiral": "spiral", "Honeycomb": "honeycomb", "Calendar": "calendar", "Masonry": "masonry",
+        "Shapes": "shapes", "Ring": "ring", "Scatter": "scatter"}
+SHAPE_LABELS = {"Heart": "heart", "Star": "star", "Diamond": "diamond", "Triangle": "triangle",
+                "Rounded square": "rounded", "Circle": "circle"}
+assert set(SHAPE_LABELS.values()) == set(SHAPE_NAMES)
 HANDLE = 5   # half the size of a Collage resize handle, in px
 DIRECTIONS = {"Automatic": "auto", "Vertical": "vertical", "Horizontal": "horizontal"}   # which way strips run
 SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
@@ -373,6 +380,19 @@ class MainWindow(QMainWindow):
         self.cal_week = QComboBox()
         self.cal_week.addItems(["Monday", "Sunday"])
         self.cal_share = self._spin(20, 80, 55)
+        self.shape_kind = QComboBox()
+        self.shape_kind.addItems(SHAPE_LABELS)
+        self.ring_n = self._spin(3, 36, 8)
+        self.ring_center = QCheckBox("Photo in the centre")
+        self.ring_center.setChecked(True)
+        self.sc_n = self._spin(1, 30, 6)
+        self.sc_size = self._spin(15, 90, 45)
+        self.sc_tilt = self._spin(0, 45, 12)
+        self.sc_border = self._spin(0, 40, 8)
+        self.sc_seed = self._spin(0, 9999, 1)
+        self.sc_seed.setToolTip("The same number always gives the same pile.")
+        self.shuffle_btn = QPushButton("Shuffle")
+        self.shuffle_btn.clicked.connect(self._shuffle)
         self.collage_hint = QLabel("Drag a photo to move it, drag a corner\nto resize (Shift = free shape).")
         self.strip_w, self.strip_h = self._dspin(20, 400, 51), self._dspin(40, 600, 152)
         self.crop = QCheckBox("Crop all images to fill")
@@ -382,16 +402,16 @@ class MainWindow(QMainWindow):
         self.rowsof = {}
         for key, label, w in [
             ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Orientation", self.orient), ("all", "Margin (pt)", self.margin),
-            ("nup,polaroid", "Rows", self.rows), ("nup,polaroid", "Columns", self.cols),
-            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,feature,bento,spiral,honeycomb,calendar", "Gutter (pt)", self.gutter),
+            ("nup,polaroid,shapes", "Rows", self.rows), ("nup,polaroid,shapes,masonry", "Columns", self.cols),
+            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,feature,bento,spiral,honeycomb,calendar,masonry,shapes,ring", "Gutter (pt)", self.gutter),
             ("nup,polaroid,framed", "Captions", self.caption),
-            ("nup,fixed,passport,polaroid,package,badges,honeycomb", "", self.marks),
+            ("nup,fixed,passport,polaroid,package,badges,honeycomb,ring", "", self.marks),
             ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
             ("fixed,passport", "Print size", self.size_preset), ("fixed,passport", "Width (mm)", self.cell_w),
             ("fixed,passport", "Height (mm)", self.cell_h), ("passport", "Copies per photo", self.copies),
-            ("fixed,passport,package,badges,honeycomb", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
+            ("fixed,passport,package,badges,honeycomb,shapes,ring", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
             ("strip,filmstrip", "Frames per strip", self.frames), ("strip,filmstrip", "Strip width (mm)", self.strip_w),
             ("strip,filmstrip", "Direction", self.direction),
             ("strip", "Strip length (mm)", self.strip_h),
@@ -406,11 +426,16 @@ class MainWindow(QMainWindow):
             ("honeycomb", "Cell width (mm)", self.hex_size), ("calendar", "Year", self.cal_year),
             ("calendar", "First month", self.cal_month), ("calendar", "Months", self.cal_months),
             ("calendar", "Week starts on", self.cal_week), ("calendar", "Photo size (%)", self.cal_share),
+            ("shapes", "Shape", self.shape_kind), ("ring", "Photos in the ring", self.ring_n), ("ring", "", self.ring_center),
+            ("scatter", "Photos per page", self.sc_n), ("scatter", "Photo size (%)", self.sc_size),
+            ("scatter", "Tilt (°)", self.sc_tilt), ("scatter", "Border (pt)", self.sc_border),
+            ("scatter", "Random seed", self.sc_seed), ("scatter", "", self.shuffle_btn),
             ("all", "", self.crop),
         ]:
             form.addRow(label, w)
             self.rowsof.setdefault(key, []).append(w)
-            if any(w is x for x in (self.size_preset, self.per_sheet, self.recipe, self.arrange_btn, self.collage_hint)):
+            if any(w is x for x in (self.size_preset, self.per_sheet, self.recipe, self.arrange_btn, self.collage_hint,
+                                   self.shuffle_btn)):
                 continue  # wired separately (presets, recipe, button) or have no value to watch
             w_changed = getattr(w, "currentIndexChanged", None) or getattr(w, "toggled", None) or w.valueChanged
             w_changed.connect(self._layout_changed)
@@ -590,6 +615,17 @@ class MainWindow(QMainWindow):
                       clockwise=self.spiral_cw.isChecked(), gutter=self.gutter.value())
         elif cls is Honeycomb:
             kw = dict(size=self.hex_size.value() * MM, gutter=self.gutter.value(), marks=self.marks.isChecked())
+        elif cls is Masonry:
+            kw = dict(columns=self.cols.value(), gutter=self.gutter.value())
+        elif cls is Shapes:
+            kw = dict(rows=self.rows.value(), cols=self.cols.value(), gutter=self.gutter.value(),
+                      kind=SHAPE_LABELS[self.shape_kind.currentText()])
+        elif cls is Ring:
+            kw = dict(photos=self.ring_n.value(), center=self.ring_center.isChecked(), gutter=self.gutter.value(),
+                      marks=self.marks.isChecked())
+        elif cls is Scatter:
+            kw = dict(photos=self.sc_n.value(), size=self.sc_size.value() / 100, tilt=self.sc_tilt.value(),
+                      border=self.sc_border.value(), seed=self.sc_seed.value())
         elif cls is Calendar:
             kw = dict(year=self.cal_year.value(), month=self.cal_month.currentIndex() + 1, months=self.cal_months.value(),
                       week_start=self.cal_week.currentText().lower(), photo_share=self.cal_share.value() / 100,
@@ -614,6 +650,9 @@ class MainWindow(QMainWindow):
             self.segments.setValue(n)
             self.segments.blockSignals(False)
 
+    def _shuffle(self):
+        self.sc_seed.setValue(random.randint(0, 9999))   # fires _layout_changed through the spin box
+
     def _update_per_sheet(self):
         lay = self.layout_
         if isinstance(lay, FixedSize):
@@ -624,6 +663,11 @@ class MainWindow(QMainWindow):
                                    else f"{lay.missing} of {total} do not fit: use bigger paper")
         elif isinstance(lay, Badges):
             self.per_sheet.setText(f"{lay.per_page} badges per page" if lay.per_page else "too big for the page")
+        elif isinstance(lay, Shapes):
+            self.per_sheet.setText(f"{lay.cols} × {lay.rows} = {lay.per_page} photos")
+        elif isinstance(lay, Ring):
+            self.per_sheet.setText(f"{lay.per_page} photos per page" + (" (the centre needs 6 or more in the ring)"
+                                                                         if lay.center_left_out else ""))
         elif isinstance(lay, Honeycomb):
             self.per_sheet.setText(f"{lay.per_page} cells per page" if lay.per_page else "too big for the page")
         else:
@@ -644,7 +688,7 @@ class MainWindow(QMainWindow):
         self.margin.setValue(int(lay.page.left))
         for attr, w in [("rows", self.rows), ("cols", self.cols), ("hgutter", self.gutter),
                         ("gutter", self.gutter), ("gap", self.gutter), ("panels", self.panels), ("border", self.border),
-                        ("mat", self.mat), ("thumbs", self.thumbs),
+                        ("mat", self.mat), ("thumbs", self.thumbs), ("columns", self.cols),
                         ("frames", self.frames), ("segments", self.segments), ("overlap", self.overlap),
                         ("angle_offset", self.angle), ("inner_radius", self.inner)]:
             if hasattr(lay, attr):
@@ -678,6 +722,19 @@ class MainWindow(QMainWindow):
             self.mat_color.setCurrentText(lay.color.capitalize())
         if isinstance(lay, Bento):
             self.bento.setCurrentIndex(list(BENTO).index(lay.template))
+        if isinstance(lay, Masonry):
+            self.cols.setValue(lay.columns)
+        if isinstance(lay, Shapes):
+            self.shape_kind.setCurrentText(next(k for k, v in SHAPE_LABELS.items() if v == lay.kind))
+        if isinstance(lay, Ring):
+            self.ring_n.setValue(lay.photos)
+            self.ring_center.setChecked(lay.center)
+        if isinstance(lay, Scatter):
+            self.sc_n.setValue(lay.photos)
+            self.sc_size.setValue(round(lay.size * 100))
+            self.sc_tilt.setValue(round(lay.tilt))
+            self.sc_border.setValue(round(lay.border))
+            self.sc_seed.setValue(lay.seed)
         if isinstance(lay, Spiral):
             self.spiral_n.setValue(lay.photos)
             self.spiral_share.setValue(round(lay.share * 100))

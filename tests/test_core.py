@@ -577,3 +577,126 @@ def test_calendar_cycles_photos_keeps_the_photo_above_the_grid_and_validates():
     for bad in (dict(month=0), dict(month=13), dict(months=0), dict(months=25), dict(week_start="friday"), dict(photo_share=0.9)):
         with pytest.raises(ValueError):
             Calendar(**bad)
+
+
+# ---- Masonry, Shapes, Ring, Scatter ----
+
+def test_masonry_uses_the_shortest_column_keeps_shapes_and_starts_new_pages(tmp_path):
+    from photosheet.core.layouts import Masonry
+    pg = PageExtent(300, 400)
+    m = Masonry(page=pg, columns=3, gutter=0)
+    assert m.pages == 1 and m.slots(0) == []                                        # no photos: one empty page
+    for i, (w, h) in enumerate([(100, 200), (100, 100), (100, 100), (100, 100), (100, 100)]):
+        m.add(_img(tmp_path, f"{i}.png", w, h))
+    rects = [r for _, r in m.slots(0)]
+    assert len(rects) == 5 and _rects_disjoint(rects)
+    cols = sorted({round(r.x) for r in rects})
+    assert cols == [0, 100, 200]                                                      # three equal columns
+    assert [round(r.w / r.h, 3) for r in rects] == [0.5, 1.0, 1.0, 1.0, 1.0]         # every photo keeps its shape
+    assert round(rects[1].x) == 100 and round(rects[2].x) == 200                      # 2nd and 3rd go to the empty columns
+    assert round(rects[3].x) == 100 and round(rects[3].y) == 100                      # the next goes under the shortest column
+    assert all(r.y + r.h <= 400 + 1e-6 for r in rects)
+    for i in range(5, 14):
+        m.add(_img(tmp_path, f"{i}.png", 100, 100))
+    assert m.pages >= 2 and all(r.y + r.h <= 400 + 1e-6 for p in range(m.pages) for _, r in m.slots(p))
+    assert sum(len(m.slots(p)) for p in range(m.pages)) == 14                         # nothing lost across pages
+    tall = Masonry(page=pg, columns=1, gutter=0)
+    tall.add(_img(tmp_path, "tall.png", 10, 1000))
+    assert tall.slots(0)[0][1].h <= 400 + 1e-6                                        # a too-tall photo is capped to the page
+    for bad in (dict(columns=0), dict(gutter=-1)):
+        with pytest.raises(ValueError):
+            Masonry(**bad)
+
+
+def test_shapes_grid_of_squares_centred_with_validation():
+    from photosheet.core.layouts import SHAPE_NAMES, Shapes
+    pg = PageExtent(400, 600)
+    s = Shapes(page=pg, rows=3, cols=2, gutter=10, kind="star")
+    for i in range(8):
+        s.add(ImageItem(f"{i}.jpg"))
+    rects = [r for _, r in s.slots(0)]
+    assert len(rects) == 6 and s.pages == 2 and len(s.slots(1)) == 2 and _rects_disjoint(rects)
+    assert all(abs(r.w - r.h) < 1e-9 for r in rects) and len({round(r.w, 6) for r in rects}) == 1   # equal squares
+    assert min(r.x for r in rects) >= -1e-6 and max(r.x + r.w for r in rects) <= 400 + 1e-6
+    left, right = min(r.x for r in rects), 400 - max(r.x + r.w for r in rects)
+    assert abs(left - right) < 1e-6                                                   # centred across
+    assert s.shape == "star" and Shapes(kind="circle").shape == "ellipse"
+    assert [Shapes(kind=k).shape for k in SHAPE_NAMES if k != "circle"] == [k for k in SHAPE_NAMES if k != "circle"]
+    for bad in (dict(kind="blob"), dict(rows=0), dict(cols=0), dict(gutter=-1)):
+        with pytest.raises(ValueError):
+            Shapes(**bad)
+
+
+def test_ring_circles_do_not_overlap_fit_the_page_and_the_centre_is_biggest():
+    import math
+
+    from photosheet.core.layouts import Ring
+    pg = PageExtent(595, 842)
+    pg.set_margins(20, 20, 20, 20)
+    for n in (3, 5, 8, 12, 24):
+        r = Ring(page=pg, photos=n, gutter=6)
+        cs = r._circles()
+        assert len(cs) == r.per_page and all(abs(c.w - c.h) < 1e-9 for c in cs)
+        ring = cs[1:] if len(cs) == n + 1 else cs
+        centres = [(c.x + c.w / 2, c.y + c.h / 2) for c in cs]
+        d = min(math.dist(a, b) - (ca.w + cb.w) / 2 for i, (a, ca) in enumerate(zip(centres, cs))
+                for b, cb in zip(centres[i + 1:], cs[i + 1:]))
+        assert d >= 6 - 1e-6, (n, d)                                                  # nothing touches, centre included
+        assert all(20 - 1e-6 <= c.x and c.x + c.w <= 575 + 1e-6 and 20 - 1e-6 <= c.y and c.y + c.h <= 822 + 1e-6 for c in cs)
+        assert (len(cs) == n + 1) == (n >= 6)                                         # a centre only when it is not tiny
+        assert r.center_left_out == (n < 6)
+        if len(cs) == n + 1:
+            assert cs[0].w >= ring[0].w - 1e-9                                        # the middle photo is never smaller
+    r = Ring(page=pg, photos=8)
+    assert r.per_page == 9 and Ring(page=pg, photos=8, center=False).per_page == 8
+    assert Ring(page=pg, photos=4).per_page == 4 and not Ring(page=pg, photos=4, center=False).center_left_out
+    for i in range(20):
+        r.add(ImageItem(f"{i}.jpg"))
+    assert r.pages == 3 and len(r.slots(0)) == 9 and len(r.slots(2)) == 2
+    first = r._circles()[1]
+    assert abs((first.x + first.w / 2) - 297.5) < 1e-6 and first.y < r._circles()[0].y   # ring photo 1 sits at the top
+    assert r.shape == "ellipse" and r.cut_guides(0) == []
+    r.marks = True
+    assert len(r.cut_guides(0)) == 48 * 9
+    for bad in (dict(photos=2), dict(photos=37), dict(gutter=-1)):
+        with pytest.raises(ValueError):
+            Ring(**bad)
+
+
+def test_scatter_is_repeatable_stays_on_the_page_and_the_seed_changes_the_pile(tmp_path):
+    import math
+
+    from photosheet.core.layouts import Scatter
+    pg = PageExtent(595, 842)
+    pg.set_margins(20, 20, 20, 20)
+    items = [_img(tmp_path, f"{i}.png", 300 + 40 * i, 200) for i in range(8)]
+    a, b = Scatter(page=pg, photos=5, seed=7), Scatter(page=pg, photos=5, seed=7)
+    for sc in (a, b):
+        for it in items:
+            sc.add(it)
+    assert a.pages == 2 and len(a.slots(0)) == 5 and len(a.slots(1)) == 3
+    assert [(r.x, r.y, ang) for _, r, _, ang in a.pile(0)] == [(r.x, r.y, ang) for _, r, _, ang in b.pile(0)]   # same seed, same pile
+    c = Scatter(page=pg, photos=5, seed=8)
+    for it in items:
+        c.add(it)
+    assert [(r.x, r.y) for _, r, _, _ in a.pile(0)] != [(r.x, r.y) for _, r, _, _ in c.pile(0)]
+    assert [ang for *_, ang in a.pile(0)] != [ang for *_, ang in a.pile(1)]            # each page its own pile
+    for item, photo, card, ang in a.pile(0) + a.pile(1):
+        assert abs(ang) <= 12 + 1e-9
+        assert abs(photo.w / photo.h - aspect(item)) < 1e-9                            # the photo keeps its shape
+        assert card.x < photo.x and card.y < photo.y and card.y + card.h - (photo.y + photo.h) > photo.y - card.y   # thicker bottom
+        t = math.radians(abs(ang))
+        hw, hh = (card.w * math.cos(t) + card.h * math.sin(t)) / 2, (card.w * math.sin(t) + card.h * math.cos(t)) / 2
+        cx, cy = card.x + card.w / 2, card.y + card.h / 2
+        assert cx - hw >= 20 - 1e-6 and cx + hw <= 575 + 1e-6 and cy - hh >= 20 - 1e-6 and cy + hh <= 822 + 1e-6   # tilted card stays inside
+    flat = Scatter(page=pg, photos=3, tilt=0)
+    flat.add(items[0])
+    assert flat.pile(0)[0][3] == 0
+    for bad in (dict(photos=0), dict(size=0.05), dict(size=0.95), dict(tilt=-1), dict(tilt=60), dict(border=-1)):
+        with pytest.raises(ValueError):
+            Scatter(**bad)
+
+
+def aspect(item):
+    from photosheet.core.layouts import aspect as _a
+    return _a(item)

@@ -5,6 +5,7 @@ import calendar
 import datetime
 import math
 import os
+import random
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -1179,3 +1180,193 @@ class Calendar(Layout):
                     out.append((str(day), Rect(cell.x, cell.y + (ch - font * 1.8) / 2, cw, font * 1.8),
                                 (190, 45, 45) if weekend(c) else (50, 50, 50)))
         return out
+
+
+SHAPE_NAMES = ("heart", "star", "diamond", "triangle", "rounded", "circle")
+
+
+@dataclass
+class Masonry(Layout):
+    """Columns of equal width with photos of their own height, each placed in the shortest column.
+
+    Nothing is cropped. When the next photo does not fit the page, a new page starts.
+    """
+    columns: int = 3
+    gutter: float = 6.0
+
+    def __post_init__(self):
+        if self.columns < 1 or self.gutter < 0:
+            raise ValueError("columns must be >= 1 and gutter >= 0")
+
+    def _paged(self) -> list[list[tuple[ImageItem, Rect]]]:
+        p, g, n = self.page, self.gutter, self.columns
+        cw, ih = (p.imageable_w - g * (n - 1)) / n, p.imageable_h
+        pages: list[list] = [[]]
+        heights = [0.0] * n
+        for img in self.images:
+            h = min(cw / aspect(img), ih)
+            col = min(range(n), key=lambda c: heights[c])
+            if heights[col] + h > ih + 1e-9 and pages[-1]:
+                pages.append([])
+                heights = [0.0] * n
+                col = 0
+            pages[-1].append((img, Rect(p.left + col * (cw + g), p.top + heights[col], cw, h)))
+            heights[col] += h + g
+        return pages
+
+    @property
+    def pages(self) -> int:
+        return len(self._paged())
+
+    def slots(self, page: int):
+        paged = self._paged()
+        return paged[page] if page < len(paged) else []
+
+
+@dataclass
+class Shapes(Layout):
+    """A grid of photos cropped to a shape: heart, star, diamond, triangle, rounded square or circle.
+
+    Cells are squares, as large as the grid allows, centred in their slot of the grid.
+    """
+    rows: int = 3
+    cols: int = 2
+    gutter: float = 8.0
+    kind: str = "heart"
+
+    def __post_init__(self):
+        if self.rows < 1 or self.cols < 1 or self.gutter < 0:
+            raise ValueError("rows and cols must be >= 1 and gutter >= 0")
+        if self.kind not in SHAPE_NAMES:
+            raise ValueError(f"unknown shape {self.kind!r}")
+
+    @property
+    def shape(self) -> str:
+        return "ellipse" if self.kind == "circle" else self.kind
+
+    @property
+    def per_page(self) -> int:
+        return self.rows * self.cols
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.per_page))
+
+    def slots(self, page: int):
+        p, g = self.page, self.gutter
+        cw, ch = (p.imageable_w - g * (self.cols - 1)) / self.cols, (p.imageable_h - g * (self.rows - 1)) / self.rows
+        side = max(1.0, min(cw, ch))
+        x0 = p.left + (p.imageable_w - (self.cols * side + (self.cols - 1) * g)) / 2
+        y0 = p.top + (p.imageable_h - (self.rows * side + (self.rows - 1) * g)) / 2
+        start, out = page * self.per_page, []
+        for i, img in enumerate(self.images[start:start + self.per_page]):
+            r, c = divmod(i, self.cols)
+            out.append((img, Rect(x0 + c * (side + g), y0 + r * (side + g), side, side)))
+        return out
+
+
+def _circle_segments(cx: float, cy: float, r: float, n: int = 48) -> list[tuple[float, float, float, float]]:
+    pts = [(cx + r * math.cos(2 * math.pi * i / n), cy + r * math.sin(2 * math.pi * i / n)) for i in range(n + 1)]
+    return [(a[0], a[1], b[0], b[1]) for a, b in zip(pts, pts[1:])]
+
+
+@dataclass
+class Ring(Layout):
+    """A wreath: `photos` round photos around a circle, and optionally a bigger one in the middle.
+
+    The ring photos are as big as they can be while still fitting the page, with the gutter between neighbours.
+    The centre photo is only added when it is at least as big as the ring photos (6 or more around the ring).
+    Each page takes the centre photo first (when there is one), then the ring photos in clockwise order from the top.
+    """
+    photos: int = 8
+    center: bool = True
+    gutter: float = 6.0
+    shape = "ellipse"
+
+    def __post_init__(self):
+        if not 3 <= self.photos <= 36 or self.gutter < 0:
+            raise ValueError("photos must be between 3 and 36 and gutter >= 0")
+
+    def _circles(self) -> list[Rect]:
+        p, g, n = self.page, self.gutter, self.photos
+        rmax = min(p.imageable_w, p.imageable_h) / 2
+        s = math.sin(math.pi / n)
+        d = max(1.0, (2 * rmax * s - g) / (1 + s))
+        radius = rmax - d / 2
+        cx, cy = p.left + p.imageable_w / 2, p.top + p.imageable_h / 2
+        ring = [Rect(cx + radius * math.sin(2 * math.pi * i / n) - d / 2,
+                     cy - radius * math.cos(2 * math.pi * i / n) - d / 2, d, d) for i in range(n)]
+        dc = 2 * (radius - d / 2 - g)
+        mid = [Rect(cx - dc / 2, cy - dc / 2, dc, dc)] if self.center and dc >= d else []   # never smaller than the ring
+        return mid + ring
+
+    @property
+    def center_left_out(self) -> bool:
+        """The centre photo is switched on but would be smaller than the ring photos (fewer than 6 around it)."""
+        return self.center and len(self._circles()) == self.photos
+
+    @property
+    def per_page(self) -> int:
+        return len(self._circles())
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.per_page))
+
+    def slots(self, page: int):
+        rects = self._circles()
+        start = page * len(rects)
+        return list(zip(self.images[start:start + len(rects)], rects))
+
+    def cut_guides(self, page: int):
+        if not self.marks:
+            return []
+        return [seg for _, r in self.slots(page) for seg in _circle_segments(r.x + r.w / 2, r.y + r.h / 2, r.w / 2)]
+
+
+@dataclass
+class Scatter(Layout):
+    """A casual pile of prints: each photo on a white card, tilted a little, with a soft shadow.
+
+    Positions and tilts are random but repeatable: the same `seed` always gives the same pile.
+    Later photos lie on top. Every photo keeps its own shape (nothing is cropped).
+    """
+    photos: int = 6
+    size: float = 0.45     # a photo's longest side, as a share of the page's shorter side
+    tilt: float = 12.0     # largest tilt either way, in degrees
+    border: float = 8.0
+    seed: int = 1
+
+    def __post_init__(self):
+        if self.photos < 1 or not 0.15 <= self.size <= 0.9 or not 0 <= self.tilt <= 45 or self.border < 0:
+            raise ValueError("photos >= 1, size between 0.15 and 0.9, tilt between 0 and 45, border >= 0")
+
+    @property
+    def per_page(self) -> int:
+        return self.photos
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.photos))
+
+    def pile(self, page: int) -> list[tuple[ImageItem, Rect, Rect, float]]:
+        """(photo, its rectangle, its card, tilt in degrees counter-clockwise), bottom of the pile first."""
+        p, b = self.page, self.border
+        iw, ih = p.imageable_w, p.imageable_h
+        rng = random.Random(self.seed * 1009 + page)
+        start, out = page * self.photos, []
+        for item in self.images[start:start + self.photos]:
+            ang, rx, ry = rng.uniform(-self.tilt, self.tilt), rng.random(), rng.random()   # the same 3 draws for every photo
+            a, longest = aspect(item), self.size * min(iw, ih)
+            pw, ph = (longest, longest / a) if a >= 1 else (longest * a, longest)
+            cw, ch = pw + 2 * b, ph + 3 * b                     # a thicker bottom edge, like an instant print
+            t = math.radians(abs(ang))
+            hw, hh = (cw * math.cos(t) + ch * math.sin(t)) / 2, (cw * math.sin(t) + ch * math.cos(t)) / 2
+            cx = p.left + hw + rx * (iw - 2 * hw) if iw > 2 * hw else p.left + iw / 2
+            cy = p.top + hh + ry * (ih - 2 * hh) if ih > 2 * hh else p.top + ih / 2
+            card = Rect(cx - cw / 2, cy - ch / 2, cw, ch)
+            out.append((item, Rect(card.x + b, card.y + b, pw, ph), card, ang))
+        return out
+
+    def slots(self, page: int):
+        return [(item, photo) for item, photo, _, _ in self.pile(page)]

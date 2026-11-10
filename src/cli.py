@@ -6,9 +6,9 @@ import datetime
 import sys
 
 from .core.geometry import PageExtent
-from .core.layouts import (BENTO, MM, RECIPES, Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip, FixedSize,
-                           FramedPrint, Honeycomb, ImageItem, Mosaic, NUp, Package, Passport, Polaroid, Poster,
-                           Single, Spiral, Strip, Triptych)
+from .core.layouts import (BENTO, MM, RECIPES, SHAPE_NAMES, Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip,
+                           FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic, NUp, Package, Passport,
+                           Polaroid, Poster, Ring, Scatter, Shapes, Single, Spiral, Strip, Triptych)
 from .core.render import render_all
 
 PAGES = {"a4": (595, 842), "letter": (612, 792), "a5": (420, 595), "4x6": (288, 432), "5x7": (360, 504),
@@ -58,6 +58,15 @@ def build(args) -> NUp | Single | Poster:
     elif args.layout == "calendar":
         lay = Calendar(page=page, year=args.year, month=args.month, months=args.months, week_start=args.week_start,
                        photo_share=args.photo_share, gutter=args.gutter)
+    elif args.layout == "masonry":
+        lay = Masonry(page=page, columns=args.cols, gutter=args.gutter)
+    elif args.layout == "shapes":
+        lay = Shapes(page=page, rows=args.rows, cols=args.cols, gutter=args.gutter, kind=args.shape)
+    elif args.layout == "ring":
+        lay = Ring(page=page, photos=args.ring_photos, center=not args.no_center, gutter=args.gutter, marks=args.marks)
+    elif args.layout == "scatter":
+        lay = Scatter(page=page, photos=args.scatter_photos, size=args.scatter_size / 100, tilt=args.tilt,
+                      border=args.border, seed=args.seed)
     elif args.layout == "strip":
         lay = Strip(page=page, frames=args.frames or 4, strip_w=(args.strip_w or 51) * MM, strip_h=args.strip_h * MM,
                     direction=args.direction)
@@ -92,7 +101,7 @@ def main(argv=None) -> int:
     ap.add_argument("-o", "--out", required=True, help=".pdf (multipage) or .png (page number appended)")
     ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic", "strip", "passport", "polaroid", "triptych", "package",
                                                        "collage", "framed", "badges", "feature", "filmstrip", "bento", "spiral",
-                                                       "honeycomb", "calendar"], default="nup")
+                                                       "honeycomb", "calendar", "masonry", "shapes", "ring", "scatter"], default="nup")
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--cols", type=int, default=2)
     ap.add_argument("--segments", type=int, default=4)
@@ -128,6 +137,13 @@ def main(argv=None) -> int:
     ap.add_argument("--months", type=int, default=12, help="calendar: how many months (pages)")
     ap.add_argument("--week-start", choices=["monday", "sunday"], default="monday", help="calendar: first weekday")
     ap.add_argument("--photo-share", type=float, default=0.55, help="calendar: the photo's share of the page height")
+    ap.add_argument("--shape", choices=list(SHAPE_NAMES), default="heart", help="shapes: what to crop the photos to")
+    ap.add_argument("--ring-photos", type=int, default=8, help="ring: photos around the circle (3-36)")
+    ap.add_argument("--no-center", action="store_true", help="ring: leave the middle empty")
+    ap.add_argument("--scatter-photos", type=int, default=6, help="scatter: photos per page")
+    ap.add_argument("--scatter-size", type=float, default=45, help="scatter: photo size, percent of the page's shorter side")
+    ap.add_argument("--tilt", type=float, default=12, help="scatter: largest tilt either way, degrees")
+    ap.add_argument("--seed", type=int, default=1, help="scatter: random seed (same seed = same pile)")
     ap.add_argument("--landscape", action="store_true", help="turn the paper sideways (e.g. 4x6 for 4 x 2 photos)")
     ap.add_argument("--copies", type=int, default=0, help="passport: copies of each photo, 0 = fill the sheet")
     ap.add_argument("--gutter", type=float, default=4, help="gap between photos / panels / prints, points")
