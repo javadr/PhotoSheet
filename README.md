@@ -11,11 +11,19 @@ PhotoSheet
 [![Downloads](https://pepy.tech/badge/photosheet/month)](https://pepy.tech/project/photosheet)
 ![GitHub last commit](https://img.shields.io/github/last-commit/javadr/PhotoSheet)
 
-<p align="center"><img src="src/icons/photosheet.png" width="128" alt="PhotoSheet logo"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/javadr/PhotoSheet/master/src/icons/photosheet.png" width="128" alt="PhotoSheet logo"></p>
 
 Put many photos on one printed sheet: passport photos, contact sheets, wallet prints, photo-booth strips,
 posters and more. PhotoSheet previews the page, lets you arrange the photos with the mouse, and then
 prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
+
+## Screenshots
+
+| N-up with captions | Polaroid |
+|---|---|
+| ![N-up contact sheet](https://raw.githubusercontent.com/javadr/PhotoSheet/master/docs/screenshots/nup.png) | ![Polaroid prints](https://raw.githubusercontent.com/javadr/PhotoSheet/master/docs/screenshots/polaroid.png) |
+| **Mosaic** | **Carousel** |
+| ![Mosaic rows](https://raw.githubusercontent.com/javadr/PhotoSheet/master/docs/screenshots/mosaic.png) | ![Carousel montage](https://raw.githubusercontent.com/javadr/PhotoSheet/master/docs/screenshots/carousel.png) |
 
 ## Features
 
