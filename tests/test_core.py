@@ -203,3 +203,108 @@ def test_crop_overflow_is_how_far_the_photo_sticks_out():
     assert crop_overflow(200, 100, Rect(0, 0, 100, 200), Rotation.NONE) == (300, 0)
     assert crop_overflow(200, 100, Rect(0, 0, 100, 200)) == (0, 0)                    # AUTO turns it to fit exactly
     assert crop_overflow(100, 100, Rect(0, 0, 50, 50)) == (0, 0)                      # same shape: nothing to move
+
+
+# ---- Polaroid, Triptych, Package, Collage ----
+
+def test_polaroid_cards_keep_proportions_thick_bottom_and_captions():
+    from photosheet.core.layouts import Polaroid
+    pg = PageExtent(400, 500)
+    p = Polaroid(page=pg, rows=1, cols=2, hgutter=0, vgutter=0, border=10, bottom_ratio=3, caption="filename")
+    p.add(ImageItem("/x/me.jpg"))
+    (img, photo), = p.slots(0)
+    card, = p.cards(0)
+    assert abs(card.w / card.h - 88 / 107) < 1e-9                                  # real instant-film card shape
+    assert photo.x - card.x == 10 and photo.y - card.y == 10                       # thin side/top border...
+    assert abs((card.y + card.h) - (photo.y + photo.h) - 30) < 1e-9                # ...thick bottom: 3 x border
+    (text, band), = p.captions(0)
+    assert text == "me.jpg" and band.y >= photo.y + photo.h and band.y + band.h <= card.y + card.h
+    assert Polaroid(page=pg, marks=False).cut_guides(0) == []
+    with pytest.raises(ValueError):
+        Polaroid(border=0)
+
+
+def test_triptych_splits_one_photo_into_panels_with_gaps(tmp_path):
+    from photosheet.core.layouts import Triptych
+    t = Triptych(page=PageExtent(300, 400), panels=3, gap=10)
+    t.add(_img(tmp_path, "wide.png", 300, 100))          # aspect 3:1
+    group, panels = t.panels_for(0)
+    assert abs(group.w / group.h - 3) < 1e-9 and group.w <= 300 + 1e-9             # keeps the photo's shape
+    assert len(panels) == 3 and abs(sum(r.w for r in panels) + 20 - group.w) < 1e-9
+    assert panels[1].x - (panels[0].x + panels[0].w) == 10                          # the gap
+    assert t.pages == 1 and len(t.slots(0)) == 3 and t.slots(5) == []
+    t.vertical = True
+    _, vp = t.panels_for(0)
+    assert vp[1].y > vp[0].y + vp[0].h and vp[0].x == vp[1].x
+    t.add(_img(tmp_path, "b.png", 100, 100))
+    assert t.pages == 2                                                              # one page per photo
+    with pytest.raises(ValueError):
+        Triptych(panels=0)
+
+
+def test_package_recipes_all_fit_without_overlap_and_inside_the_page():
+    from photosheet.core.layouts import RECIPES, Package
+    for key, (label, paper, prints) in RECIPES.items():
+        pg = PageExtent(*paper)
+        pg.set_margins(4, 4, 4, 4)
+        pk = Package(page=pg, prints=prints)
+        pk.add(ImageItem("me.jpg"))
+        rects = [r for _, r in pk.slots(0)]
+        assert pk.missing == 0 and len(rects) == sum(n for _, _, n in prints), label
+        for r in rects:
+            assert r.x >= 4 - 1e-6 and r.y >= 4 - 1e-6 and r.x + r.w <= paper[0] - 4 + 1e-6 and r.y + r.h <= paper[1] - 4 + 1e-6, label
+        for i, a in enumerate(rects):
+            for b in rects[i + 1:]:
+                assert a.x + a.w <= b.x + 1e-6 or b.x + b.w <= a.x + 1e-6 or a.y + a.h <= b.y + 1e-6 or b.y + b.h <= a.y + 1e-6, label
+
+
+def test_package_reports_what_does_not_fit_and_one_sheet_per_photo():
+    from photosheet.core.layouts import MM, Package
+    pk = Package(page=PageExtent(200, 200), prints=[(127, 177.8, 1)])              # a 5x7 on a 200 pt square
+    pk.add(ImageItem("a.jpg"))
+    assert pk.missing == 1 and pk.slots(0) == []
+    pk2 = Package(page=PageExtent(576, 720), prints=[(63.5, 88.9, 4)])
+    pk2.add(ImageItem("a.jpg"))
+    pk2.add(ImageItem("b.jpg"))
+    assert pk2.pages == 2 and all(i.path == "b.jpg" for i, _ in pk2.slots(1))
+    sizes = sorted((round(r.w / MM, 1), round(r.h / MM, 1)) for _, r in pk2.slots(0))
+    assert all(sorted(s) == [63.5, 88.9] for s in sizes)                           # each print keeps its size (maybe turned)
+    with pytest.raises(ValueError):
+        Package(prints=[])
+
+
+def test_collage_places_photos_automatically_and_keeps_them_on_the_page(tmp_path):
+    from photosheet.core.layouts import Collage
+    c = Collage(page=PageExtent(400, 600))
+    for i, (w, h) in enumerate([(300, 200), (200, 300), (300, 300)]):
+        c.add(_img(tmp_path, f"{i}.png", w, h))
+    slots = c.slots(0)
+    assert c.pages == 1 and len(slots) == 3 and all(img.box for img, _ in slots)
+    for _, r in slots:
+        assert r.x >= -1e-6 and r.y >= -1e-6 and r.x + r.w <= 400 + 1e-6 and r.y + r.h <= 600 + 1e-6
+    assert [round(r.w / r.h, 3) for _, r in slots] == [1.5, 0.667, 1.0]            # photos keep their shape
+    late = _img(tmp_path, "late.png", 100, 100)
+    c.add(late)
+    c.slots(0)                                                                      # placed on the next layout
+    assert late.box and c.images[0].box == slots[0][0].box                          # earlier photos stay put
+    far = c.clamp((380, 580, 200, 100))
+    assert far[0] + far[2] <= 400 and far[1] + far[3] <= 600                        # dragged off the page: pulled back
+    big = c.clamp((0, 0, 1000, 500))
+    assert abs(big[2] / big[3] - 2) < 1e-9 and big[2] <= 400                        # too big: shrunk, same shape
+
+
+def test_snap_delta_and_collage_snap_targets(tmp_path):
+    from photosheet.core.layouts import Collage, snap_delta
+    assert snap_delta([10.0, 50.0], [12.0, 100.0], 3) == 2.0                        # left edge is 2 pt from a guide
+    assert snap_delta([10.0], [20.0], 3) is None                                    # nothing close
+    assert snap_delta([10.0, 50.0], [12.0, 48.5], 3) == -1.5                       # the closer of two matches wins
+    c = Collage(page=PageExtent(400, 600))
+    c.add(_img(tmp_path, "a.png", 100, 100))
+    c.add(_img(tmp_path, "b.png", 100, 100))
+    c.slots(0)
+    xs, ys = c.snap_targets(skip=0)
+    assert 0 in xs and 200 in xs and 400 in xs and 300 in ys                         # page edges and centre lines
+    b = c.images[1].box
+    assert b[0] in xs and b[0] + b[2] in xs                                          # the other photo's edges
+    xs0, _ = c.snap_targets(skip=None)
+    assert len(xs0) == len(xs) + 3                                                  # without skip, photo 0's 3 x-lines are included

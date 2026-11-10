@@ -12,7 +12,7 @@ from PIL import Image, ImageCms, ImageDraw, ImageFont, ImageOps
 
 from .effects import apply_effects
 from .geometry import Rect, Rotation, fit
-from .layouts import Carousel, ImageItem, Layout, Poster
+from .layouts import Carousel, ImageItem, Layout, Poster, Triptych
 
 _SRGB = None
 
@@ -129,6 +129,18 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
                             round((win.x + win.w) * s), round((win.y + win.h) * s)))
         canvas.paste(tile, (round(p.left * s), round(p.top * s)))
         return canvas
+    if isinstance(layout, Triptych):
+        if page >= len(layout.images):
+            return canvas
+        item = layout.images[page]
+        group, panels = layout.panels_for(page)
+        pic = Image.new("RGB", (max(1, round(group.w * s)), max(1, round(group.h * s))), background)
+        _place(pic, item, load(item, printer_profile, fast), Rect(0, 0, group.w, group.h), s, fast)
+        for r in panels:   # the gaps between panels stay paper-coloured
+            box = (round((r.x - group.x) * s), round((r.y - group.y) * s),
+                   round((r.x - group.x + r.w) * s), round((r.y - group.y + r.h) * s))
+            canvas.paste(pic.crop(box), (round(r.x * s), round(r.y * s)))
+        return canvas
     if isinstance(layout, Carousel):
         wedges = layout.wedges()
         for i in [*range(0, len(wedges), 2), *range(1, len(wedges), 2)]:  # evens, then odds on top
@@ -142,6 +154,9 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
     draw = ImageDraw.Draw(canvas)
     for x0, y0, x1, y1 in layout.cut_guides(page):  # under the photos, so they never cover an image
         draw.line((x0 * s, y0 * s, x1 * s, y1 * s), fill=(140, 140, 140), width=max(1, round(0.4 * s)))
+    for card in layout.cards(page):   # white cards sit under the photos
+        draw.rectangle((card.x * s, card.y * s, (card.x + card.w) * s - 1, (card.y + card.h) * s - 1),
+                       fill=(255, 255, 255), outline=(205, 205, 205), width=max(1, round(0.5 * s)))
     for item, slot in layout.slots(page):
         _place(canvas, item, load(item, printer_profile, fast), slot, s, fast)
     for text, band in layout.captions(page):

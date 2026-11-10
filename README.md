@@ -20,12 +20,18 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 | **Passport** | Copies of each photo filling a small sheet, like a photo shop: 8 passport photos in a 4 × 2 grid on a landscape 4 × 6 in. |
 | **Mosaic** | Rows of mixed-shape photos, each shown whole and not cropped. |
 | **Photo strip** | Booth-style strips with several frames each, outlined for cutting. |
+| **Polaroid** | Instant-photo prints: white cards with a thin border and a thick bottom edge, with optional captions. |
+| **Triptych** | One photo split into 2 to 12 panels with a gap between them, side by side or stacked, on one page. |
+| **Package** | Studio sheets that mix print sizes, such as one 5 × 7 plus four wallets on an 8 × 10. Prints are packed to use the sheet well. |
+| **Collage** | Free-form: move and resize each photo with the mouse, with snapping guides, handles and bring-to-front. |
 
 **Working with the page**
 
 - Live preview that fits the window. Zoom with `Ctrl` + mouse wheel, `Ctrl` + `+` / `-`, or `Ctrl+0` to fit.
 - Drag a photo on the page onto another to swap them. With *Crop all images to fill* on, dragging
   repositions the photo inside its frame instead (hold `Shift` to swap). Works on Carousel wedges too.
+- In a **Collage**, drag a photo to move it and drag a corner to resize it. It snaps to the page edges, the centre
+  and other photos (hold `Ctrl` to turn snapping off, `Shift` for a free shape).
 - Undo and redo for adding, removing, reordering, moving and effect changes.
 - Drop image files onto the window to add them.
 - Paper sizes A4, Letter, A5, 4 × 6 in and 5 × 7 in, in portrait or landscape.
@@ -61,6 +67,12 @@ photosheet-cli photos/*.jpg -o contact.pdf --layout nup --rows 5 --cols 4 --capt
 
 # Photo-booth strips with 4 frames each
 photosheet-cli photos/*.jpg -o strips.pdf --layout strip --frames 4
+
+# A studio 8 x 10 sheet: one 5 x 7 and four wallets of each photo
+photosheet-cli me.jpg -o package.pdf --layout package --page 8x10 --recipe 5x7-4wallets
+
+# Instant-photo prints, 2 x 3 per page, numbered
+photosheet-cli photos/*.jpg -o polaroid.pdf --layout polaroid --rows 3 --cols 2 --caption number
 ```
 
 `photosheet-cli --help` lists every option.

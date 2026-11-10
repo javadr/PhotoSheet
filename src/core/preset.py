@@ -5,10 +5,12 @@ import json
 from dataclasses import asdict, fields
 
 from .geometry import PageExtent
-from .layouts import Carousel, FixedSize, ImageItem, Layout, Mosaic, NUp, Passport, Poster, Single, Strip
+from .layouts import (Carousel, Collage, FixedSize, ImageItem, Layout, Mosaic, NUp, Package, Passport, Polaroid, Poster,
+                      Single, Strip, Triptych)
 
 TYPES = {"nup": NUp, "single": Single, "poster": Poster, "carousel": Carousel,
-         "fixed": FixedSize, "mosaic": Mosaic, "strip": Strip, "passport": Passport}
+         "fixed": FixedSize, "mosaic": Mosaic, "strip": Strip, "passport": Passport,
+         "polaroid": Polaroid, "triptych": Triptych, "package": Package, "collage": Collage}
 
 
 def kind(layout: Layout) -> str:
@@ -32,6 +34,10 @@ def from_dict(d: dict) -> Layout:
     page = PageExtent(**d.get("page", {}))
     lay = cls(page=page, **kw)
     lay.images = [ImageItem(**i) for i in d.get("images", [])]
+    for i in lay.images:   # JSON turns tuples into lists
+        i.box = tuple(i.box) if i.box else None
+    if isinstance(lay, Package):
+        lay.prints = [tuple(x) for x in lay.prints]
     for i in lay.images:  # JSON turns effect tuples into lists
         i.effects = [(n, p) for n, p in i.effects]
     return lay

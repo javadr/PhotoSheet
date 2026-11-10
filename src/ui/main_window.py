@@ -15,15 +15,19 @@ from PySide6.QtWidgets import (
 
 from ..core import preset
 from ..core.geometry import PageExtent, Rect, crop_overflow
-from ..core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Passport, Poster, Single, Strip, aspect
+from ..core.layouts import (MM, RECIPES, Carousel, Collage, FixedSize, ImageItem, Mosaic, NUp, Package, Passport,
+                            Polaroid, Poster, Single, Strip, Triptych, aspect, snap_delta)
 from ..core.render import render_page
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
-         "4 × 6 in": (288, 432), "5 × 7 in": (360, 504)}   # portrait points; Orientation turns them
+         "4 × 6 in": (288, 432), "5 × 7 in": (360, 504), "8 × 10 in": (576, 720)}   # portrait points; Orientation turns them
 KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
-         "Fixed size": FixedSize, "Passport": Passport, "Mosaic": Mosaic, "Photo strip": Strip}
+         "Fixed size": FixedSize, "Passport": Passport, "Mosaic": Mosaic, "Photo strip": Strip, "Polaroid": Polaroid,
+         "Triptych": Triptych, "Package": Package, "Collage": Collage}
 KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "carousel",
-        "Fixed size": "fixed", "Passport": "passport", "Mosaic": "mosaic", "Photo strip": "strip"}
+        "Fixed size": "fixed", "Passport": "passport", "Mosaic": "mosaic", "Photo strip": "strip", "Polaroid": "polaroid",
+        "Triptych": "triptych", "Package": "package", "Collage": "collage"}
+HANDLE = 5   # half the size of a Collage resize handle, in px
 SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
                 "Wallet 2.5 × 3.5 in": (63.5, 88.9), "4 × 6 in": (101.6, 152.4),
                 "5 × 7 in": (127, 177.8), "ID 30 × 40 mm": (30, 40), "China visa 33 × 48 mm": (33, 48),
@@ -155,17 +159,27 @@ class _PageLabel(QLabel):
             return
         p = QPainter(self)
         hl = self.palette().color(QPalette.ColorRole.Highlight)
-        for rect, kind in self.overlay:
-            poly = isinstance(rect, QPolygonF)
+        for shape, kind in self.overlay:
+            if kind == "guide":                      # a snap line: a zero-width or zero-height rectangle
+                p.setPen(QPen(QColor(255, 60, 160), 1, Qt.PenStyle.DashLine))
+                p.drawLine(shape.left(), shape.top(), shape.right(), shape.bottom())
+                continue
+            poly = isinstance(shape, QPolygonF)
             if kind == "src":
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(QColor(0, 0, 0, 90))
+            elif kind == "sel":                      # outline of the selected Collage photo
+                p.setPen(QPen(hl, 2))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+            elif kind == "handle":
+                p.setPen(QPen(QColor(255, 255, 255), 1))
+                p.setBrush(hl)
             else:
                 fill = QColor(hl)
                 fill.setAlpha(70)
                 p.setPen(QPen(hl, 3))
                 p.setBrush(fill)
-            p.drawPolygon(rect) if poly else p.drawRect(rect)
+            p.drawPolygon(shape) if poly else p.drawRect(shape)
         p.end()
 
 
@@ -188,6 +202,7 @@ class MainWindow(QMainWindow):
         self.preview.setAccessibleName("Page preview")
         self.preview.installEventFilter(self)
         self._press, self._dragging, self._drop = None, False, None   # page drag-and-drop state
+        self._cl = None   # Collage photo being moved or resized
         self._pan = None   # photo being repositioned inside its frame
         self._pan_timer = QTimer(self, singleShot=True, interval=30, timeout=self.refresh)   # coalesce live re-renders
         self.zoom: float | None = None   # None = fit to window
@@ -267,6 +282,9 @@ class MainWindow(QMainWindow):
         self.remove_act.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         self.list.addAction(self.remove_act)
         act(e, "Center Photo in Frame", self._center_photo)
+        e.addSeparator()
+        self.front_act = act(e, "Bring to Front", lambda: self._z_order(True), "Ctrl+Shift+]")
+        self.back_act = act(e, "Send to Back", lambda: self._z_order(False), "Ctrl+Shift+[")
         v = self.menuBar().addMenu("&View")
         v.addAction(self.layout_dock.toggleViewAction())
         v.addAction(self.image_dock.toggleViewAction())
@@ -309,6 +327,19 @@ class MainWindow(QMainWindow):
         self.caption.addItems(["None", "Filename", "Number", "Both"])
         self.marks = QCheckBox("Cut marks")
         self.frames = self._spin(1, 12, 4)
+        self.border = self._spin(2, 60, 10)
+        self.panels = self._spin(1, 12, 3)
+        self.vertical = QCheckBox("Stack panels vertically")
+        self.recipe = QComboBox()
+        self.recipe.addItems([label for label, _, _ in RECIPES.values()])
+        self.recipe.currentIndexChanged.connect(self._apply_recipe)
+        self.snap = QCheckBox("Snap to guides")
+        self.snap.setChecked(True)
+        self.snap.setToolTip("Moves and resizes snap to the page edges and centre, and to other photos.\n"
+                             "Hold Ctrl while dragging to turn snapping off for that drag.")
+        self.arrange_btn = QPushButton("Auto-arrange")
+        self.arrange_btn.clicked.connect(self._auto_arrange)
+        self.collage_hint = QLabel("Drag a photo to move it, drag a corner\nto resize (Shift = free shape).")
         self.strip_w, self.strip_h = self._dspin(20, 400, 51), self._dspin(40, 600, 152)
         self.crop = QCheckBox("Crop all images to fill")
         self.crop.setToolTip("With this on, drag a photo on the page to reposition it inside its frame.\n"
@@ -317,22 +348,26 @@ class MainWindow(QMainWindow):
         self.rowsof = {}
         for key, label, w in [
             ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Orientation", self.orient), ("all", "Margin (pt)", self.margin),
-            ("nup", "Rows", self.rows), ("nup", "Columns", self.cols), ("nup,fixed,passport,mosaic,strip", "Gutter (pt)", self.gutter),
-            ("nup", "Captions", self.caption), ("nup,fixed,passport", "", self.marks),
+            ("nup,polaroid", "Rows", self.rows), ("nup,polaroid", "Columns", self.cols),
+            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package", "Gutter (pt)", self.gutter),
+            ("nup,polaroid", "Captions", self.caption), ("nup,fixed,passport,polaroid,package", "", self.marks),
             ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
             ("fixed,passport", "Print size", self.size_preset), ("fixed,passport", "Width (mm)", self.cell_w),
             ("fixed,passport", "Height (mm)", self.cell_h), ("passport", "Copies per photo", self.copies),
-            ("fixed,passport", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
+            ("fixed,passport,package", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
             ("strip", "Frames per strip", self.frames), ("strip", "Strip width (mm)", self.strip_w),
             ("strip", "Strip height (mm)", self.strip_h),
+            ("polaroid", "Border (pt)", self.border), ("triptych", "Panels", self.panels),
+            ("triptych", "", self.vertical), ("package", "Sheet", self.recipe),
+            ("collage", "", self.snap), ("collage", "", self.arrange_btn), ("collage", "", self.collage_hint),
             ("all", "", self.crop),
         ]:
             form.addRow(label, w)
             self.rowsof.setdefault(key, []).append(w)
-            if w is self.size_preset or w is self.per_sheet:
-                continue  # wired to _apply_size_preset, which then calls _layout_changed
+            if any(w is x for x in (self.size_preset, self.per_sheet, self.recipe, self.arrange_btn, self.collage_hint)):
+                continue  # wired separately (presets, recipe, button) or have no value to watch
             w_changed = getattr(w, "currentIndexChanged", None) or getattr(w, "toggled", None) or w.valueChanged
             w_changed.connect(self._layout_changed)
             if w in (self.cell_w, self.cell_h):
@@ -350,6 +385,7 @@ class MainWindow(QMainWindow):
         self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.list.model().rowsMoved.connect(self._reordered)
         self.list.currentRowChanged.connect(self._load_effects)
+        self.list.currentRowChanged.connect(lambda *_: self._refresh_overlay())
         add, rem = QPushButton("Add…"), QPushButton("Remove")
         add.clicked.connect(self.add_images)
         rem.clicked.connect(self.remove_selected)
@@ -395,6 +431,24 @@ class MainWindow(QMainWindow):
                 sp.blockSignals(False)
         self._layout_changed()
 
+    def _recipe_key(self) -> str:
+        return list(RECIPES)[self.recipe.currentIndex()]
+
+    def _apply_recipe(self, *_):
+        """Picking a studio sheet also picks its paper (8 x 10 in)."""
+        if self._loading:
+            return
+        paper = RECIPES[self._recipe_key()][1]
+        for name, dims in PAGES.items():
+            if dims == paper:
+                self.page_size.blockSignals(True)
+                self.page_size.setCurrentText(name)
+                self.page_size.blockSignals(False)
+                self.orient.blockSignals(True)
+                self.orient.setCurrentText("Portrait")
+                self.orient.blockSignals(False)
+        self._layout_changed()
+
     def _size_edited(self, *_):
         self.size_preset.blockSignals(True)  # a hand-typed size is no longer a named preset
         self.size_preset.setCurrentText("Custom")
@@ -424,7 +478,7 @@ class MainWindow(QMainWindow):
             pw, ph = ph, pw
         page = PageExtent(pw, ph)
         kind = self.kind.currentText()
-        if kind == "Passport" and self._last_kind != "Passport":
+        if kind in ("Passport", "Package") and self._last_kind not in ("Passport", "Package"):
             for sp, v in ((self.margin, 4), (self.gutter, 4)):   # shop-style sheets are nearly borderless
                 sp.blockSignals(True)
                 sp.setValue(v)
@@ -434,10 +488,12 @@ class MainWindow(QMainWindow):
         if not page.set_margins(m, m, m, m):
             return
         kw = {}
-        if cls is NUp:
+        if cls in (NUp, Polaroid):
             kw = dict(rows=self.rows.value(), cols=self.cols.value(),
                       hgutter=self.gutter.value(), vgutter=self.gutter.value(),
                       caption=self.caption.currentText().lower(), marks=self.marks.isChecked())
+            if cls is Polaroid:
+                kw["border"] = self.border.value()
         elif cls is Carousel:
             kw = dict(segments=self.segments.value(), overlap=self.overlap.value(),
                       angle_offset=self.angle.value(), inner_radius=self.inner.value())
@@ -453,13 +509,22 @@ class MainWindow(QMainWindow):
                       strip_h=self.strip_h.value() * MM, gutter=self.gutter.value())
         elif cls is Mosaic:
             kw = dict(row_height=self.row_h.value() * MM, gutter=self.gutter.value())
+        elif cls is Triptych:
+            kw = dict(panels=self.panels.value(), gap=self.gutter.value(), vertical=self.vertical.isChecked())
+        elif cls is Package:
+            kw = dict(prints=[tuple(x) for x in RECIPES[self._recipe_key()][2]], gutter=self.gutter.value(),
+                      marks=self.marks.isChecked())
+        elif cls is Collage:
+            kw = dict(snap=self.snap.isChecked())
         self.layout_ = cls(page=page, **kw)
         for it in old.images:
             it.crop = self.crop.isChecked()
             self.layout_.add(it)
         if cls is Carousel and not isinstance(old, Carousel):
             self._sync_segments()   # entering Carousel: one wedge per photo
+        self.preview.overlay = []
         self._update_per_sheet()
+        self._update_collage_actions()
         self.refresh()
 
     def _sync_segments(self):
@@ -473,7 +538,14 @@ class MainWindow(QMainWindow):
 
     def _update_per_sheet(self):
         lay = self.layout_
-        self.per_sheet.setText(f"{lay.cols} × {lay.rows} = {lay.per_page} photos" if isinstance(lay, FixedSize) else "")
+        if isinstance(lay, FixedSize):
+            self.per_sheet.setText(f"{lay.cols} × {lay.rows} = {lay.per_page} photos")
+        elif isinstance(lay, Package):
+            total = sum(int(n) for _, _, n in lay.prints)
+            self.per_sheet.setText(f"{total} prints, all fit" if not lay.missing
+                                   else f"{lay.missing} of {total} do not fit: use bigger paper")
+        else:
+            self.per_sheet.setText("")
 
     def _sync_controls(self):
         """Push self.layout_ into the widgets (after loading a preset)."""
@@ -489,7 +561,8 @@ class MainWindow(QMainWindow):
                     self.orient.setCurrentText(orient)
         self.margin.setValue(int(lay.page.left))
         for attr, w in [("rows", self.rows), ("cols", self.cols), ("hgutter", self.gutter),
-                        ("gutter", self.gutter), ("frames", self.frames), ("segments", self.segments), ("overlap", self.overlap),
+                        ("gutter", self.gutter), ("gap", self.gutter), ("panels", self.panels), ("border", self.border),
+                        ("frames", self.frames), ("segments", self.segments), ("overlap", self.overlap),
                         ("angle_offset", self.angle), ("inner_radius", self.inner)]:
             if hasattr(lay, attr):
                 w.setValue(int(getattr(lay, attr)))
@@ -508,12 +581,22 @@ class MainWindow(QMainWindow):
         if isinstance(lay, Strip):
             self.strip_w.setValue(lay.strip_w / MM)
             self.strip_h.setValue(lay.strip_h / MM)
+        if isinstance(lay, Triptych):
+            self.vertical.setChecked(lay.vertical)
+        if isinstance(lay, Package):
+            keys = [i for i, (_, _, pr) in enumerate(RECIPES.values())
+                    if [tuple(x) for x in pr] == [tuple(x) for x in lay.prints]]
+            if keys:
+                self.recipe.setCurrentIndex(keys[0])
+        if isinstance(lay, Collage):
+            self.snap.setChecked(lay.snap)
         if hasattr(lay, "caption"):
             self.caption.setCurrentText(lay.caption.capitalize())
         self.marks.setChecked(lay.marks)
         self._loading = False
         self._show_kind_rows()
         self._update_per_sheet()
+        self._update_collage_actions()
         self._fill_list()
 
     def dragEnterEvent(self, e):
@@ -715,7 +798,7 @@ class MainWindow(QMainWindow):
         idx, rect = hit
         item = self.layout_.images[idx]
         carousel = isinstance(self.layout_, Carousel)   # a Carousel always crops, and never rotates
-        if not (item.crop or carousel) or isinstance(self.layout_, Poster):
+        if not (item.crop or carousel) or isinstance(self.layout_, (Poster, Triptych, Collage)):
             return None
         a = aspect(item)
         ox, oy = crop_overflow(a * 1000, 1000, rect, 0 if carousel else item.rotation)
@@ -747,9 +830,175 @@ class MainWindow(QMainWindow):
             self.undo_stack.push(_Edit(self, "Reposition Photo", pn["before"], copy.deepcopy(self.layout_.images)))
             self.refresh()
 
-    def _page_mouse(self, ev) -> bool:
+    # ---- Collage: move and resize photos freely ----
+    def _update_collage_actions(self):
+        on = isinstance(self.layout_, Collage)
+        for a in (self.front_act, self.back_act):
+            a.setEnabled(on)
+
+    def _auto_arrange(self):
+        if isinstance(self.layout_, Collage) and self.layout_.images:
+            self._edit("Auto-Arrange", self.layout_.autoarrange)
+            self.refresh()
+
+    def _z_order(self, front: bool):
+        row = self.list.currentRow()
+        imgs = self.layout_.images
+        if not isinstance(self.layout_, Collage) or not 0 <= row < len(imgs):
+            return
+        to = len(imgs) - 1 if front else 0
+        if row == to:
+            return
+        self._edit("Bring to Front" if front else "Send to Back", lambda: imgs.insert(to, imgs.pop(row)))
+        self._fill_list()
+        self.list.setCurrentRow(to)
+        self.refresh()
+
+    def _pt_to_widget(self, x: float, y: float) -> QPointF:
+        return self._slot_rect(Rect(x, y, 0, 0)).topLeft()
+
+    def _refresh_overlay(self):
+        """Selection outline and resize handles for the selected Collage photo."""
+        if not isinstance(self.layout_, Collage) or self._cl:
+            return
+        ov = []
+        slots = dict(self._slots_now())
+        row = self.list.currentRow()
+        if row in slots:
+            r = self._slot_rect(slots[row])
+            ov.append((r, "sel"))
+            for pt in (r.topLeft(), r.topRight(), r.bottomLeft(), r.bottomRight()):
+                ov.append((QRectF(pt.x() - HANDLE, pt.y() - HANDLE, 2 * HANDLE, 2 * HANDLE), "handle"))
+        self.preview.overlay = ov
+        self.preview.update()
+
+    def _corner_at(self, pos, rect: QRectF):
+        corners = (rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight())
+        for c, pt in enumerate(corners):
+            if abs(pos.x() - pt.x()) <= HANDLE + 3 and abs(pos.y() - pt.y()) <= HANDLE + 3:
+                return c
+        return None
+
+    def _collage_drag(self, ev):
+        """Apply the current mouse position to the photo being moved or resized (snapping unless Ctrl is held)."""
+        cl, lay = self._cl, self.layout_
+        d = ev.position() - cl["start"]
+        if not cl["moved"] and d.manhattanLength() < QApplication.startDragDistance():
+            return
+        cl["moved"] = True
+        dx, dy = d.x() / cl["k"], d.y() / cl["k"]
+        x, y, w, h = cl["box0"]
+        mods = ev.modifiers()
+        free = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+        snap = lay.snap and not (mods & Qt.KeyboardModifier.ControlModifier)
+        tol = 6 / cl["k"]
+        xs, ys = lay.snap_targets(skip=cl["idx"])
+        if cl["mode"] == "move":
+            nx, ny = x + dx, y + dy
+            if snap:
+                sx = snap_delta([nx, nx + w / 2, nx + w], xs, tol)
+                sy = snap_delta([ny, ny + h / 2, ny + h], ys, tol)
+                nx += sx or 0.0
+                ny += sy or 0.0
+            new = lay.clamp((nx, ny, w, h))
+        else:
+            c = cl["corner"]                                   # 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
+            ax = x if c in (1, 3) else x + w                   # the opposite corner stays where it is
+            ay = y if c in (2, 3) else y + h
+            mx = (x + w if c in (1, 3) else x) + dx
+            my = (y + h if c in (2, 3) else y) + dy
+            if snap:
+                mx += snap_delta([mx], xs, tol) or 0.0
+                my += snap_delta([my], ys, tol) or 0.0
+            nw, nh = max(abs(mx - ax), 12.0), max(abs(my - ay), 12.0)
+            pg = lay.page                                       # the growing edge stops at the page margin;
+            room_w = (pg.left + pg.imageable_w - ax) if c in (1, 3) else (ax - pg.left)   # the held corner never moves
+            room_h = (pg.top + pg.imageable_h - ay) if c in (2, 3) else (ay - pg.top)
+            if free:
+                nw, nh = min(nw, room_w), min(nh, room_h)
+            else:                                               # keep the photo's shape: follow the bigger change
+                k = min(max(nw / w, nh / h), room_w / w, room_h / h)
+                nw, nh = w * k, h * k
+            nx = ax if c in (1, 3) else ax - nw
+            ny = ay if c in (2, 3) else ay - nh
+            new = lay.clamp((nx, ny, nw, nh))
+        cl["item"].box = tuple(new)
+        r = self._slot_rect(Rect(*new))
+        ov = [(r, "sel")] + [(QRectF(pt.x() - HANDLE, pt.y() - HANDLE, 2 * HANDLE, 2 * HANDLE), "handle")
+                             for pt in (r.topLeft(), r.topRight(), r.bottomLeft(), r.bottomRight())]
+        p = lay.page
+        top, bottom = self._pt_to_widget(0, 0), self._pt_to_widget(p.width, p.height)
+        if snap:                                                # draw the guide lines that were hit
+            for v in (new[0], new[0] + new[2] / 2, new[0] + new[2]):
+                if any(abs(v - t) < 0.01 for t in xs):
+                    gx = self._pt_to_widget(v, 0).x()
+                    ov.append((QRectF(gx, top.y(), 0, bottom.y() - top.y()), "guide"))
+            for v in (new[1], new[1] + new[3] / 2, new[1] + new[3]):
+                if any(abs(v - t) < 0.01 for t in ys):
+                    gy = self._pt_to_widget(0, v).y()
+                    ov.append((QRectF(top.x(), gy, bottom.x() - top.x(), 0), "guide"))
+        self.preview.overlay = ov
+        self.preview.update()
+        if not self._pan_timer.isActive():
+            self._pan_timer.start()                             # live re-render, coalesced
+
+    def _collage_mouse(self, ev) -> bool:
         t, left = ev.type(), Qt.MouseButton.LeftButton
-        swap_ok = not isinstance(self.layout_, (Poster, Passport))   # one tiled image / one photo in many slots
+        lay = self.layout_
+        if t == QEvent.Type.MouseButtonPress and ev.button() == left:
+            pos = ev.position()
+            slots = dict(self._slots_now())
+            row = self.list.currentRow()
+            mode = idx = corner = None
+            if row in slots:                                    # the selected photo's handles win over photos beneath
+                corner = self._corner_at(pos, self._slot_rect(slots[row]))
+                if corner is not None:
+                    mode, idx = "resize", row
+            if mode is None:
+                hit = self._slot_at(pos)                        # topmost photo under the cursor
+                if hit:
+                    mode, idx = "move", hit[0]
+            if mode is None:
+                return False
+            self.list.setCurrentRow(idx)
+            z = self.zoom if self.zoom is not None else self._fit_zoom()
+            r = slots[idx]
+            self._cl = dict(mode=mode, idx=idx, corner=corner, start=pos, box0=(r.x, r.y, r.w, r.h),
+                            k=self.SCREEN_DPI * z / 72, before=copy.deepcopy(lay.images), moved=False,
+                            item=lay.images[idx])
+            return True
+        if t == QEvent.Type.MouseMove:
+            if self._cl and ev.buttons() & left:
+                self._collage_drag(ev)
+                return True
+            if not ev.buttons():
+                slots = dict(self._slots_now())
+                row = self.list.currentRow()
+                corner = self._corner_at(ev.position(), self._slot_rect(slots[row])) if row in slots else None
+                if corner is not None:
+                    shape = Qt.CursorShape.SizeFDiagCursor if corner in (0, 3) else Qt.CursorShape.SizeBDiagCursor
+                elif self._slot_at(ev.position()):
+                    shape = Qt.CursorShape.SizeAllCursor
+                else:
+                    shape = Qt.CursorShape.ArrowCursor
+                self.preview.setCursor(shape)
+            return False
+        if t == QEvent.Type.MouseButtonRelease and ev.button() == left and self._cl:
+            cl, self._cl = self._cl, None
+            if cl["moved"] and cl["item"].box != tuple(cl["box0"]):
+                self.undo_stack.push(_Edit(self, "Move Photo" if cl["mode"] == "move" else "Resize Photo",
+                                           cl["before"], copy.deepcopy(lay.images)))
+            self.refresh()
+            self._refresh_overlay()
+            return True
+        return False
+
+    def _page_mouse(self, ev) -> bool:
+        if isinstance(self.layout_, Collage):
+            return self._collage_mouse(ev)
+        t, left = ev.type(), Qt.MouseButton.LeftButton
+        # one tiled image / one photo in many slots / free positions: swapping makes no sense
+        swap_ok = not isinstance(self.layout_, (Poster, Passport, Triptych, Package, Collage))
         if t == QEvent.Type.MouseButtonPress and ev.button() == left:
             hit = self._slot_at(ev.position())
             self._press, self._pan = None, None
@@ -823,6 +1072,7 @@ class MainWindow(QMainWindow):
         img = self._base.scaled(max(1, round(self._base.width() * r)), max(1, round(self._base.height() * r)),
                                 Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
         self.preview.setPixmap(self._paper(img, self._dpr))
+        self._refresh_overlay()
 
     def _paper(self, img: QImage, dpr: float) -> QPixmap:
         """The rendered page on a soft shadow with a hairline edge."""
@@ -850,6 +1100,8 @@ class MainWindow(QMainWindow):
     def refresh(self):
         self.page_no = max(0, min(self.page_no, self.layout_.pages - 1))
         self.page_label.setText(f" {self.page_no + 1} / {self.layout_.pages} ")
+        if isinstance(self.layout_, Collage):
+            self.layout_.slots(0)   # place new photos here, on the UI thread, before the render thread reads them
         self._gen += 1
         dpr = self.devicePixelRatioF()
         z = self.zoom if self.zoom is not None else self._fit_zoom()
@@ -869,6 +1121,7 @@ class MainWindow(QMainWindow):
             self.statusBar().hide()
             self._base, self._base_zoom = res, self._pending_zoom
             self.preview.setPixmap(self._paper(res, self._dpr))
+            self._refresh_overlay()
 
     # ---- files ----
     def open_preset(self):

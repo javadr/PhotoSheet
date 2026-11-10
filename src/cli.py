@@ -5,10 +5,12 @@ import argparse
 import sys
 
 from .core.geometry import PageExtent
-from .core.layouts import MM, Carousel, FixedSize, ImageItem, Mosaic, NUp, Passport, Poster, Single, Strip
+from .core.layouts import (MM, RECIPES, Carousel, Collage, FixedSize, ImageItem, Mosaic, NUp, Package, Passport, Polaroid, Poster,
+                           Single, Strip, Triptych)
 from .core.render import render_all
 
-PAGES = {"a4": (595, 842), "letter": (612, 792), "a5": (420, 595), "4x6": (288, 432), "5x7": (360, 504)}
+PAGES = {"a4": (595, 842), "letter": (612, 792), "a5": (420, 595), "4x6": (288, 432), "5x7": (360, 504),
+         "8x10": (576, 720)}
 
 
 def build(args) -> NUp | Single | Poster:
@@ -26,6 +28,16 @@ def build(args) -> NUp | Single | Poster:
     elif args.layout == "passport":
         lay = Passport(page=page, cell_w=args.cell_w * MM, cell_h=args.cell_h * MM, copies=args.copies,
                        hgutter=args.gutter, vgutter=args.gutter, marks=args.marks)
+    elif args.layout == "polaroid":
+        lay = Polaroid(page=page, rows=args.rows, cols=args.cols, caption=args.caption, marks=args.marks,
+                       border=args.border)
+    elif args.layout == "triptych":
+        lay = Triptych(page=page, panels=args.panels, gap=args.gutter, vertical=args.vertical)
+    elif args.layout == "package":
+        lay = Package(page=page, prints=[tuple(x) for x in RECIPES[args.recipe][2]], gutter=args.gutter,
+                      marks=args.marks)
+    elif args.layout == "collage":
+        lay = Collage(page=page)
     elif args.layout == "strip":
         lay = Strip(page=page, frames=args.frames, strip_w=args.strip_w * MM, strip_h=args.strip_h * MM)
     elif args.layout == "mosaic":
@@ -57,7 +69,8 @@ def main(argv=None) -> int:
     ap.add_argument("-V", "--version", action=_ShowVersion)
     ap.add_argument("images", nargs="+")
     ap.add_argument("-o", "--out", required=True, help=".pdf (multipage) or .png (page number appended)")
-    ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic", "strip", "passport"], default="nup")
+    ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic", "strip", "passport", "polaroid", "triptych", "package",
+                                                       "collage"], default="nup")
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--cols", type=int, default=2)
     ap.add_argument("--segments", type=int, default=4)
@@ -70,9 +83,13 @@ def main(argv=None) -> int:
     ap.add_argument("--frames", type=int, default=4, help="strip: photos per strip")
     ap.add_argument("--strip-w", type=float, default=51, help="strip width, mm")
     ap.add_argument("--strip-h", type=float, default=152, help="strip height, mm")
+    ap.add_argument("--border", type=float, default=10, help="polaroid: border width, points")
+    ap.add_argument("--panels", type=int, default=3, help="triptych: number of panels")
+    ap.add_argument("--vertical", action="store_true", help="triptych: stack the panels top to bottom")
+    ap.add_argument("--recipe", choices=list(RECIPES), default="5x7-4wallets", help="package: which sheet to fill")
     ap.add_argument("--landscape", action="store_true", help="turn the paper sideways (e.g. 4x6 for 4 x 2 photos)")
     ap.add_argument("--copies", type=int, default=0, help="passport: copies of each photo, 0 = fill the sheet")
-    ap.add_argument("--gutter", type=float, default=4, help="passport: gap between photos, points")
+    ap.add_argument("--gutter", type=float, default=4, help="gap between photos / panels / prints, points")
     ap.add_argument("--page", choices=list(PAGES), default="a4")
     ap.add_argument("--margin", type=float, default=18, help="points")
     ap.add_argument("--poster-w", type=float, default=16, help="inches")

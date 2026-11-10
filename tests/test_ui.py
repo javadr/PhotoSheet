@@ -565,3 +565,221 @@ def test_desk_contrasts_with_the_white_page_on_light_and_dark_themes_and_ignores
     vp = win.scroll.viewport()
     assert vp.autoFillBackground()
     assert vp.palette().color(vp.backgroundRole()) == desk_color(win.palette().color(QPalette.ColorRole.Window))
+
+
+# ---- Polaroid, Triptych, Package, Collage ----
+
+def _scale(w):
+    return w.SCREEN_DPI * (w.zoom if w.zoom is not None else w._fit_zoom()) / 72   # screen px per point
+
+
+def _collage_window(app, tmp_path, n=3, boxes=((60, 60, 120, 90), (260, 80, 120, 90), (160, 300, 120, 90)), snap=False):
+    w = _ready_window(app, tmp_path, n)
+    w.kind.setCurrentText("Collage")
+    w.snap.setChecked(snap)
+    for it, b in zip(w.layout_.images, boxes):
+        it.box = b
+    w.refresh()
+    return w
+
+
+def test_new_layouts_keep_photos_show_their_controls_and_roundtrip_presets(app, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import Collage, Package, Polaroid, Triptych
+    w = _win_with_images(tmp_path, 3)
+    w.show()
+    w.kind.setCurrentText("Polaroid")
+    assert isinstance(w.layout_, Polaroid) and len(w.layout_.images) == 3
+    assert w.border.isVisible() and w.rows.isVisible() and w.caption.isVisible() and w.marks.isVisible()
+    w.border.setValue(14)
+    w.caption.setCurrentText("Number")
+    assert w.layout_.border == 14 and w.layout_.caption == "number" and w.layout_.cards(0)
+    w.kind.setCurrentText("Triptych")
+    assert isinstance(w.layout_, Triptych) and w.panels.isVisible() and w.vertical.isVisible() and not w.border.isVisible()
+    w.panels.setValue(5)
+    w.vertical.setChecked(True)
+    assert (w.layout_.panels, w.layout_.vertical) == (5, True) and w.layout_.pages == 3
+    w.kind.setCurrentText("Package")
+    assert isinstance(w.layout_, Package) and w.recipe.isVisible() and w.per_sheet.isVisible() and not w.panels.isVisible()
+    assert (w.margin.value(), w.gutter.value()) == (4, 4)
+    w.kind.setCurrentText("Collage")
+    assert isinstance(w.layout_, Collage) and w.snap.isVisible() and w.arrange_btn.isVisible() and not w.recipe.isVisible()
+    assert len(w.layout_.images) == 3 and all(i.box for i in w.layout_.images)
+    for setup, check in (
+        (lambda: (w.kind.setCurrentText("Polaroid"), w.border.setValue(14)), lambda: (w.kind.currentText(), w.border.value()) == ("Polaroid", 14)),
+        (lambda: (w.kind.setCurrentText("Triptych"), w.panels.setValue(4), w.vertical.setChecked(True)),
+         lambda: (w.kind.currentText(), w.panels.value(), w.vertical.isChecked()) == ("Triptych", 4, True)),
+        (lambda: (w.kind.setCurrentText("Package"), w.recipe.setCurrentIndex(3)),
+         lambda: (w.kind.currentText(), w.recipe.currentIndex()) == ("Package", 3)),
+        (lambda: (w.kind.setCurrentText("Collage"), w.snap.setChecked(False)),
+         lambda: (w.kind.currentText(), w.snap.isChecked()) == ("Collage", False)),
+    ):
+        setup()
+        f = str(tmp_path / "p.json")
+        preset.save(w.layout_, f)
+        w.kind.setCurrentText("N-up")
+        w.snap.setChecked(True)
+        w.layout_ = preset.load(f)
+        w._sync_controls()
+        assert check()
+
+
+def test_package_recipe_picks_the_paper_and_says_when_prints_do_not_fit(app, tmp_path):
+    w = _win_with_images(tmp_path, 1)
+    w.kind.setCurrentText("Package")
+    w.page_size.setCurrentText("A4")
+    w.recipe.setCurrentText("2 × 4×6")                           # choosing a sheet also chooses its paper
+    assert w.page_size.currentText() == "8 × 10 in" and (w.layout_.page.width, w.layout_.page.height) == (576, 720)
+    assert w.per_sheet.text() == "2 prints, all fit" and len(w.layout_.slots(0)) == 2
+    w.page_size.setCurrentText("A5")                              # too small for two 4 x 6
+    assert "do not fit" in w.per_sheet.text() and w.layout_.missing >= 1
+
+
+def test_polaroid_photos_swap_on_the_page_but_triptych_does_not_start_a_drag(app, tmp_path):
+    w = _ready_window(app, tmp_path)
+    w.kind.setCurrentText("Polaroid")
+    names = lambda: [i.path[-5:] for i in w.layout_.images]
+    slots = dict(w._slots_now())
+    a, c = w._slot_rect(slots[0]).center(), w._slot_rect(slots[2]).center()
+    _mouse(app, w, "press", a)
+    _mouse(app, w, "move", (a + c) / 2)
+    _mouse(app, w, "move", c)
+    _mouse(app, w, "release", c)
+    assert names() == ["2.png", "1.png", "0.png"]
+    w.kind.setCurrentText("Triptych")
+    slots = dict(w._slots_now())
+    p = w._slot_rect(slots[0]).center()
+    _mouse(app, w, "press", p)
+    assert w._press is None and w._pan is None
+
+
+def test_collage_drag_moves_a_photo_and_undoes(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = _collage_window(app, tmp_path)
+    k = _scale(w)
+    slots = dict(w._slots_now())
+    c = w._slot_rect(slots[0]).center()
+    _mouse(app, w, "press", c)
+    assert w.list.currentRow() == 0                              # grabbing a photo selects it
+    _mouse(app, w, "move", c + QPointF(15, 10))
+    _mouse(app, w, "move", c + QPointF(40, 30))
+    _mouse(app, w, "release", c + QPointF(40, 30))
+    x, y, bw, bh = w.layout_.images[0].box
+    assert abs(x - (60 + 40 / k)) < 1e-6 and abs(y - (60 + 30 / k)) < 1e-6 and (bw, bh) == (120, 90)
+    assert w.undo_act.text() == "Undo Move Photo"
+    w.undo_stack.undo()
+    assert w.layout_.images[0].box == (60, 60, 120, 90)
+    _mouse(app, w, "press", c)
+    _mouse(app, w, "release", c)                                 # a plain click moves nothing and adds no undo step
+    assert w.layout_.images[0].box == (60, 60, 120, 90) and w.undo_act.text() != "Undo Move Photo"
+
+
+def test_collage_corner_handle_resizes_keeping_shape_or_free_with_shift(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = _collage_window(app, tmp_path)
+    k = _scale(w)
+    w.list.setCurrentRow(0)
+    assert [kind for _, kind in w.preview.overlay].count("handle") == 4 and w.preview.overlay[0][1] == "sel"
+    br = w._slot_rect(dict(w._slots_now())[0]).bottomRight()
+    _mouse(app, w, "press", br)
+    _mouse(app, w, "move", br + QPointF(20, 2))
+    _mouse(app, w, "move", br + QPointF(60, 5))
+    _mouse(app, w, "release", br + QPointF(60, 5))
+    x, y, bw, bh = w.layout_.images[0].box
+    assert (x, y) == (60, 60)                                    # the opposite (top-left) corner stays put
+    assert abs(bw / bh - 120 / 90) < 1e-9 and abs(bw - (120 + 60 / k)) < 1e-6   # same shape, grew by the bigger change
+    assert w.undo_act.text() == "Undo Resize Photo"
+    w.undo_stack.undo()
+    br = w._slot_rect(dict(w._slots_now())[0]).bottomRight()
+    shift = Qt.KeyboardModifier.ShiftModifier
+    _mouse(app, w, "press", br)
+    _mouse(app, w, "move", br + QPointF(20, 2), shift)
+    _mouse(app, w, "move", br + QPointF(60, 5), shift)
+    _mouse(app, w, "release", br + QPointF(60, 5), shift)
+    x, y, bw, bh = w.layout_.images[0].box
+    assert abs(bw - (120 + 60 / k)) < 1e-6 and abs(bh - (90 + 5 / k)) < 1e-6   # Shift: width and height change on their own
+    tl = w._slot_rect(dict(w._slots_now())[0]).topLeft()                         # a left-side handle anchors the right edge
+    right_before = w.layout_.images[0].box[0] + w.layout_.images[0].box[2]
+    _mouse(app, w, "press", tl)
+    _mouse(app, w, "move", tl + QPointF(-15, -10))
+    _mouse(app, w, "move", tl + QPointF(-30, -20))
+    _mouse(app, w, "release", tl + QPointF(-30, -20))
+    nx, ny, nw, nh = w.layout_.images[0].box
+    assert abs(nx + nw - right_before) < 1e-6
+
+
+def test_collage_snaps_to_guides_and_ctrl_turns_it_off(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = _collage_window(app, tmp_path, boxes=((100, 100, 120, 90), (360, 200, 120, 90), (160, 500, 120, 90)), snap=True)
+    k = _scale(w)
+    left = w.layout_.page.left
+    dx_pt = -(100 - left) + 2                                    # drop the photo 2 pt off the page margin
+    c = w._slot_rect(dict(w._slots_now())[0]).center()
+    ctrl = Qt.KeyboardModifier.ControlModifier
+    for mod, expect in ((Qt.KeyboardModifier.NoModifier, left), (ctrl, 100 + dx_pt)):
+        w.layout_.images[0].box = (100, 100, 120, 90)
+        w.refresh()
+        c = w._slot_rect(dict(w._slots_now())[0]).center()
+        _mouse(app, w, "press", c, mod)
+        _mouse(app, w, "move", c + QPointF(dx_pt * k / 2, 0), mod)
+        _mouse(app, w, "move", c + QPointF(dx_pt * k, 0), mod)
+        if mod == Qt.KeyboardModifier.NoModifier:
+            assert any(kind == "guide" for _, kind in w.preview.overlay)           # the guide line shows while dragging
+        _mouse(app, w, "release", c + QPointF(dx_pt * k, 0), mod)
+        assert abs(w.layout_.images[0].box[0] - expect) < 1e-6, mod
+        assert w.layout_.images[0].box[1] == 100                                   # y had nothing close to snap to
+    # snapping to another photo: line up with photo 1's left edge
+    w.layout_.images[0].box = (100, 100, 120, 90)
+    w.refresh()
+    c = w._slot_rect(dict(w._slots_now())[0]).center()
+    dx = 360 - 100 - 3                                                             # 3 pt short of x = 360
+    _mouse(app, w, "press", c)
+    _mouse(app, w, "move", c + QPointF(dx * k / 2, 0))
+    _mouse(app, w, "move", c + QPointF(dx * k, 0))
+    _mouse(app, w, "release", c + QPointF(dx * k, 0))
+    assert abs(w.layout_.images[0].box[0] - 360) < 1e-6
+
+
+def test_collage_bring_to_front_send_to_back_and_auto_arrange(app, tmp_path):
+    w = _collage_window(app, tmp_path)
+    names = lambda: [i.path[-5:] for i in w.layout_.images]
+    assert w.front_act.isEnabled() and w.back_act.isEnabled()
+    w.list.setCurrentRow(0)
+    w._z_order(True)
+    assert names() == ["1.png", "2.png", "0.png"] and w.list.currentRow() == 2          # last = drawn on top
+    assert w.undo_act.text() == "Undo Bring to Front"
+    w._z_order(False)
+    assert names() == ["0.png", "1.png", "2.png"] and w.list.currentRow() == 0
+    w.undo_stack.undo()
+    assert names() == ["1.png", "2.png", "0.png"]
+    for it in w.layout_.images:
+        it.box = (50, 50, 200, 150)                                                      # a pile
+    w.arrange_btn.click()
+    rects = [r for _, r in w.layout_.slots(0)]
+    pg = w.layout_.page
+    for i, a in enumerate(rects):
+        assert a.x >= pg.left - 1e-6 and a.y >= pg.top - 1e-6 and a.x + a.w <= pg.width - pg.right + 1e-6
+        for b in rects[i + 1:]:
+            assert a.x + a.w <= b.x + 1e-6 or b.x + b.w <= a.x + 1e-6 or a.y + a.h <= b.y + 1e-6 or b.y + b.h <= a.y + 1e-6
+    assert w.undo_act.text() == "Undo Auto-Arrange"
+    w.kind.setCurrentText("N-up")
+    assert not w.front_act.isEnabled() and not w.back_act.isEnabled() and w.preview.overlay == []
+
+
+def test_collage_resize_stops_at_the_page_margin_and_keeps_the_held_corner(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = _collage_window(app, tmp_path)
+    pg = w.layout_.page
+    k = _scale(w)
+    w.list.setCurrentRow(0)                                      # handles belong to the selected photo
+    x0, y0, bw, bh = w.layout_.images[0].box
+    br = w._slot_rect(dict(w._slots_now())[0]).bottomRight()
+    far = QPointF(5000, 5000)                                    # far beyond the page
+    _mouse(app, w, "press", br)
+    _mouse(app, w, "move", br + QPointF(20, 20))
+    _mouse(app, w, "move", br + far)
+    _mouse(app, w, "release", br + far)
+    x, y, nw, nh = w.layout_.images[0].box
+    assert (x, y) == (x0, y0)                                    # top-left held still
+    assert x + nw <= pg.left + pg.imageable_w + 1e-6 and y + nh <= pg.top + pg.imageable_h + 1e-6
+    assert abs(nw / nh - bw / bh) < 1e-9 and nw > bw             # grew as far as the page allows, same shape

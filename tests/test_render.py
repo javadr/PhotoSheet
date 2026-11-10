@@ -177,3 +177,76 @@ def test_banner_is_coloured_on_a_terminal_and_plain_otherwise():
     assert "\x1b[" not in text and f"v{__version__}" in text
     assert all(line.rstrip() in text for line in ART.strip("\n").splitlines())     # the whole art is there
     assert max(len(line) for line in ART.strip("\n").splitlines()) < 80            # fits a normal terminal
+
+
+def test_polaroid_draws_a_white_card_with_a_thick_bottom_and_the_photo_inside(red):
+    from photosheet.core.layouts import Polaroid
+    pg = PageExtent(220, 260)
+    p = Polaroid(page=pg, rows=1, cols=1, border=10, bottom_ratio=3, caption="both", caption_pt=9)
+    p.add(ImageItem(red, crop=True, rotation=0))
+    im = render_page(p, 0, dpi=72)
+    card, = p.cards(0)
+    (_, photo), = p.slots(0)
+    assert im.getpixel((int(photo.x + photo.w / 2), int(photo.y + photo.h / 2))) == (255, 0, 0)    # photo in the middle
+    assert im.getpixel((int(card.x + 4), int(card.y + 4))) == (255, 255, 255)                      # white border
+    edge = im.crop((int(card.x + 12), int(photo.y + photo.h + 2), int(card.x + card.w - 12), int(card.y + card.h - 2)))
+    assert edge.getextrema()[0][0] < 200                                                    # caption text drawn in the bottom edge
+    assert im.getpixel((int(card.x), int(card.y + card.h / 2))) != (255, 255, 255)                  # hairline outline
+
+
+def test_triptych_leaves_gaps_and_each_panel_shows_its_part(tmp_path):
+    from photosheet.core.layouts import Triptych
+    f = tmp_path / "three.png"
+    im = Image.new("RGB", (300, 100), (255, 0, 0))
+    im.paste((0, 255, 0), (100, 0, 200, 100))
+    im.paste((0, 0, 255), (200, 0, 300, 100))
+    im.save(f)
+    t = Triptych(page=PageExtent(300, 200), panels=3, gap=10)
+    t.add(ImageItem(str(f), rotation=0))
+    out = render_page(t, 0, dpi=72)
+    group, panels = t.panels_for(0)
+    cy = int(group.y + group.h / 2)
+    centres = [int(r.x + r.w / 2) for r in panels]
+    assert [out.getpixel((x, cy)) for x in centres] == [(255, 0, 0), (0, 255, 0), (0, 0, 255)]   # each panel its own third
+    gap_x = int(panels[0].x + panels[0].w + 5)
+    assert out.getpixel((gap_x, cy)) == (255, 255, 255)                                             # the gap is paper
+
+
+def test_package_renders_every_print_and_collage_respects_boxes_and_order(red, tmp_path):
+    from photosheet.core.layouts import Collage, Package
+    pk = Package(page=PageExtent(576, 720), prints=[(127, 177.8, 1), (63.5, 88.9, 4)])
+    pk.add(ImageItem(red, crop=True, rotation=0))
+    im = render_page(pk, 0, dpi=72)
+    for _, r in pk.slots(0):
+        assert im.getpixel((int(r.x + r.w / 2), int(r.y + r.h / 2))) == (255, 0, 0)
+    blue = tmp_path / "blue.png"
+    Image.new("RGB", (100, 100), (0, 0, 255)).save(blue)
+    c = Collage(page=PageExtent(300, 300))
+    a = ImageItem(red, box=(20, 20, 160, 160), crop=True, rotation=0)
+    b = ImageItem(str(blue), box=(100, 100, 160, 160), crop=True, rotation=0)
+    c.add(a)
+    c.add(b)
+    out = render_page(c, 0, dpi=72)
+    assert out.getpixel((60, 60)) == (255, 0, 0) and out.getpixel((200, 200)) == (0, 0, 255)
+    assert out.getpixel((130, 130)) == (0, 0, 255)                          # overlap: the later photo is on top
+    assert out.getpixel((10, 10)) == (255, 255, 255)                        # outside every box is paper
+    c.images.reverse()
+    assert render_page(c, 0, dpi=72).getpixel((130, 130)) == (255, 0, 0)    # reorder = bring to front
+
+
+def test_cli_new_layouts_and_presets_roundtrip(red, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import Collage, Package, Polaroid, Triptych
+    for args in (["--layout", "polaroid", "--rows", "2", "--cols", "2", "--caption", "number"],
+                 ["--layout", "triptych", "--panels", "3"], ["--layout", "package", "--page", "8x10"],
+                 ["--layout", "package", "--page", "8x10", "--recipe", "2x4x6"], ["--layout", "collage"]):
+        out = tmp_path / "o.pdf"
+        assert cli.main([red, red, "-o", str(out), "--dpi", "40", *args]) == 0 and out.stat().st_size > 0
+    c = Collage(page=PageExtent(300, 300), snap=False)
+    c.add(ImageItem(red, box=(10, 20, 30, 40)))
+    pk = Package(page=PageExtent(576, 720), prints=[(63.5, 88.9, 2)], gutter=6)
+    for lay in (c, pk, Polaroid(page=PageExtent(300, 300), border=7), Triptych(page=PageExtent(300, 300), panels=5, vertical=True)):
+        f = str(tmp_path / "p.json")
+        preset.save(lay, f)
+        back = preset.load(f)
+        assert type(back) is type(lay) and back == lay                       # tuples/lists survive the JSON round trip
