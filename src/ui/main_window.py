@@ -31,6 +31,7 @@ KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "caro
         "Triptych": "triptych", "Package": "package", "Collage": "collage", "Framed print": "framed",
         "Badges": "badges", "Feature": "feature", "Film strip": "filmstrip"}
 HANDLE = 5   # half the size of a Collage resize handle, in px
+DIRECTIONS = {"Automatic": "auto", "Vertical": "vertical", "Horizontal": "horizontal"}   # which way strips run
 SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
                 "Wallet 2.5 × 3.5 in": (63.5, 88.9), "4 × 6 in": (101.6, 152.4),
                 "5 × 7 in": (127, 177.8), "ID 30 × 40 mm": (30, 40), "China visa 33 × 48 mm": (33, 48),
@@ -352,6 +353,9 @@ class MainWindow(QMainWindow):
         self.thumbs = self._spin(1, 12, 4)
         self.side = QCheckBox("Small photos on the side")
         self.hero_share = self._spin(20, 90, 70)
+        self.direction = QComboBox()
+        self.direction.addItems(DIRECTIONS)
+        self.direction.setToolTip("Automatic: strips run sideways on a landscape page and top to bottom on a portrait page.")
         self.collage_hint = QLabel("Drag a photo to move it, drag a corner\nto resize (Shift = free shape).")
         self.strip_w, self.strip_h = self._dspin(20, 400, 51), self._dspin(40, 600, 152)
         self.crop = QCheckBox("Crop all images to fill")
@@ -372,7 +376,8 @@ class MainWindow(QMainWindow):
             ("fixed,passport", "Height (mm)", self.cell_h), ("passport", "Copies per photo", self.copies),
             ("fixed,passport,package,badges", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
             ("strip,filmstrip", "Frames per strip", self.frames), ("strip,filmstrip", "Strip width (mm)", self.strip_w),
-            ("strip", "Strip height (mm)", self.strip_h),
+            ("strip,filmstrip", "Direction", self.direction),
+            ("strip", "Strip length (mm)", self.strip_h),
             ("polaroid", "Border (pt)", self.border), ("triptych", "Panels", self.panels),
             ("triptych", "", self.vertical), ("package", "Sheet", self.recipe),
             ("collage", "", self.snap), ("collage", "", self.arrange_btn), ("collage", "", self.collage_hint),
@@ -533,7 +538,8 @@ class MainWindow(QMainWindow):
                 kw["copies"] = self.copies.value()
         elif cls is Strip:
             kw = dict(frames=self.frames.value(), strip_w=self.strip_w.value() * MM,
-                      strip_h=self.strip_h.value() * MM, gutter=self.gutter.value())
+                      strip_h=self.strip_h.value() * MM, gutter=self.gutter.value(),
+                      direction=DIRECTIONS[self.direction.currentText()])
         elif cls is Mosaic:
             kw = dict(row_height=self.row_h.value() * MM, gutter=self.gutter.value())
         elif cls is Triptych:
@@ -553,7 +559,8 @@ class MainWindow(QMainWindow):
             kw = dict(thumbs=self.thumbs.value(), side=self.side.isChecked(),
                       hero_share=self.hero_share.value() / 100, gutter=self.gutter.value())
         elif cls is Filmstrip:
-            kw = dict(frames=self.frames.value(), strip_w=self.strip_w.value() * MM, gutter=self.gutter.value())
+            kw = dict(frames=self.frames.value(), strip_w=self.strip_w.value() * MM, gutter=self.gutter.value(),
+                      direction=DIRECTIONS[self.direction.currentText()])
         self.layout_ = cls(page=page, **kw)
         for it in old.images:
             it.crop = self.crop.isChecked()
@@ -622,6 +629,7 @@ class MainWindow(QMainWindow):
         if isinstance(lay, Strip):
             self.strip_w.setValue(lay.strip_w / MM)
             self.strip_h.setValue(lay.strip_h / MM)
+            self.direction.setCurrentText(next(k for k, v in DIRECTIONS.items() if v == lay.direction))
         if isinstance(lay, Triptych):
             self.vertical.setChecked(lay.vertical)
         if isinstance(lay, Package):

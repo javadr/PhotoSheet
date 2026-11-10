@@ -46,9 +46,10 @@ def build(args) -> NUp | Single | Poster:
     elif args.layout == "feature":
         lay = Feature(page=page, thumbs=args.thumbs, side=args.side, hero_share=args.hero_share, gutter=args.gutter)
     elif args.layout == "filmstrip":
-        lay = Filmstrip(page=page, frames=args.frames or 6, strip_w=(args.strip_w or 35) * MM)
+        lay = Filmstrip(page=page, frames=args.frames or 6, strip_w=(args.strip_w or 35) * MM, direction=args.direction)
     elif args.layout == "strip":
-        lay = Strip(page=page, frames=args.frames or 4, strip_w=(args.strip_w or 51) * MM, strip_h=args.strip_h * MM)
+        lay = Strip(page=page, frames=args.frames or 4, strip_w=(args.strip_w or 51) * MM, strip_h=args.strip_h * MM,
+                    direction=args.direction)
     elif args.layout == "mosaic":
         lay = Mosaic(page=page, row_height=args.row_height * MM)
     elif args.layout == "carousel":
@@ -91,7 +92,9 @@ def main(argv=None) -> int:
     ap.add_argument("--marks", action="store_true", help="nup/fixed: crop marks at photo corners")
     ap.add_argument("--frames", type=int, help="strip / filmstrip: photos per strip (default 4 / 6)")
     ap.add_argument("--strip-w", type=float, help="strip / filmstrip width, mm (default 51 / 35)")
-    ap.add_argument("--strip-h", type=float, default=152, help="strip height, mm")
+    ap.add_argument("--strip-h", type=float, default=152, help="strip length, mm")
+    ap.add_argument("--direction", choices=["auto", "vertical", "horizontal"], default="auto",
+                    help="strip / filmstrip: which way the strips run (auto = horizontal on a landscape page)")
     ap.add_argument("--border", type=float, default=10, help="polaroid: border width, points")
     ap.add_argument("--panels", type=int, default=3, help="triptych: number of panels")
     ap.add_argument("--vertical", action="store_true", help="triptych: stack the panels top to bottom")

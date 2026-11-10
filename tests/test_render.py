@@ -327,3 +327,28 @@ def test_cli_and_presets_for_the_last_four_layouts(red, tmp_path):
         preset.save(lay, f)
         back = preset.load(f)
         assert type(back) is type(lay) and back == lay
+
+
+def test_horizontal_strips_render_wide_black_film_and_frames_in_a_row(red):
+    from photosheet.core.layouts import Filmstrip, Strip
+    pg = PageExtent(500, 300)
+    pg.set_margins(10, 10, 10, 10)
+    fs = Filmstrip(page=pg, frames=3)
+    fs.add(ImageItem(red, crop=True, rotation=0))
+    fs.add(ImageItem(red, crop=True, rotation=0))
+    im = render_page(fs, 0, dpi=72)
+    strip = next(r for k, r, _ in fs.shapes(0) if k == "rect")
+    assert strip.w > strip.h and im.getpixel((int(strip.x + strip.w / 2), int(strip.y + 1))) == (22, 22, 22)
+    a, b = fs.slots(0)[0][1], fs.slots(0)[1][1]
+    assert a.y == b.y and b.x > a.x                                                     # frames in a row
+    assert im.getpixel((int(a.x + a.w / 2), int(a.y + a.h / 2))) == (255, 0, 0)
+    booth = Strip(page=pg, frames=3, strip_w=60, strip_h=240, padding=6, frame_gap=4)
+    booth.add(ImageItem(red, crop=True, rotation=0))
+    out = render_page(booth, 0, dpi=72)
+    f0 = booth.slots(0)[0][1]
+    assert out.getpixel((int(f0.x + f0.w / 2), int(f0.y + f0.h / 2))) == (255, 0, 0)
+    for args in (["--layout", "filmstrip", "--landscape"], ["--layout", "strip", "--landscape"],
+                 ["--layout", "filmstrip", "--direction", "vertical", "--landscape"],
+                 ["--layout", "strip", "--direction", "horizontal"]):
+        pdf = red + ".pdf"
+        assert cli.main([red, red, "-o", pdf, "--dpi", "40", *args]) == 0

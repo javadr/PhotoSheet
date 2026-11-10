@@ -19,7 +19,7 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 | **Fixed size** | Prints of one size (passport, wallet, 4 × 6, 5 × 7 …) packed to fill the page. |
 | **Passport** | Copies of each photo filling a small sheet, like a photo shop: 8 passport photos in a 4 × 2 grid on a landscape 4 × 6 in. |
 | **Mosaic** | Rows of mixed-shape photos, each shown whole and not cropped. |
-| **Photo strip** | Booth-style strips with several frames each, outlined for cutting. |
+| **Photo strip** | Booth-style strips with several frames each, outlined for cutting. Strips run sideways on a landscape page; the Direction setting can force either way. |
 | **Polaroid** | Instant-photo prints: white cards with a thin border and a thick bottom edge, with optional captions. |
 | **Triptych** | One photo split into 2 to 12 panels with a gap between them, side by side or stacked, on one page. |
 | **Package** | Studio sheets that mix print sizes, such as one 5 × 7 plus four wallets on an 8 × 10. Prints are packed to use the sheet well. |
@@ -27,7 +27,7 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 | **Framed print** | One photo per page on a wide white, black or cream mat, with a thin line around the picture and an optional caption. |
 | **Badges** | Round photos for button badges, stickers or coasters (25 to 75 mm), staggered to fit more, with optional cut circles. |
 | **Feature** | One large hero photo with a row or column of smaller photos, repeated page after page. |
-| **Film strip** | 35 mm negative-style strips: black film with sprocket holes and 2:3 frames, several strips per page. |
+| **Film strip** | 35 mm negative-style strips: black film with sprocket holes and 2:3 frames, several strips per page, vertical or horizontal (Direction setting). |
 
 **Working with the page**
 

@@ -869,3 +869,36 @@ def test_page_drag_swaps_badges_and_feature_photos(app, tmp_path):
         _mouse(app, w, "move", c)
         _mouse(app, w, "release", c)
         assert names() == ["2.png", "1.png", "0.png"], kind
+
+
+def test_strip_direction_follows_the_page_by_default_and_the_selector_overrides_it(app, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import Filmstrip, Strip
+    w = _win_with_images(tmp_path, 7)
+    w.show()
+    for kind, cls in (("Film strip", Filmstrip), ("Photo strip", Strip)):
+        w.kind.setCurrentText(kind)
+        assert type(w.layout_) is cls and w.direction.isVisible() and w.direction.currentText() == "Automatic"
+        assert not w.layout_.horizontal                                           # portrait page
+        w.orient.setCurrentText("Landscape")
+        assert w.layout_.horizontal                                               # the same setting now runs sideways
+        a, b = (r for _, r in w.layout_.slots(0)[:2])
+        assert a.y == b.y and b.x > a.x                                           # frames in a row
+        w.direction.setCurrentText("Vertical")                                    # forced back, still on a landscape page
+        assert not w.layout_.horizontal
+        a, b = (r for _, r in w.layout_.slots(0)[:2])
+        assert a.x == b.x and b.y > a.y
+        w.orient.setCurrentText("Portrait")
+        w.direction.setCurrentText("Horizontal")                                  # forced sideways on a portrait page
+        assert w.layout_.horizontal
+        f = str(tmp_path / "p.json")
+        preset.save(w.layout_, f)
+        w.kind.setCurrentText("N-up")
+        w.direction.setCurrentText("Automatic")
+        w.layout_ = preset.load(f)
+        w._sync_controls()
+        assert w.kind.currentText() == kind and w.direction.currentText() == "Horizontal" and w.layout_.horizontal
+        w.direction.setCurrentText("Automatic")
+    assert not w.direction.isVisible() or w.kind.currentText() in ("Photo strip", "Film strip")
+    w.kind.setCurrentText("N-up")
+    assert not w.direction.isVisible()

@@ -348,12 +348,30 @@ class Strip(Layout):
     padding: float = 6.0
     frame_gap: float = 4.0
     gutter: float = 8.0         # space between strips on the page
+    direction: str = "auto"     # auto (horizontal on a landscape page) | vertical | horizontal
 
     def __post_init__(self):
         if self.frames < 1 or self.strip_w <= 0 or self.strip_h <= 0:
             raise ValueError("frames and strip size must be positive")
         if self.frame_h <= 0 or self.strip_w - 2 * self.padding <= 0:
             raise ValueError("strip is too small for its frames and padding")
+        if self.direction not in ("auto", "vertical", "horizontal"):
+            raise ValueError(f"unknown strip direction {self.direction!r}")
+
+    @property
+    def horizontal(self) -> bool:
+        """Strips run left to right (frames side by side) instead of top to bottom."""
+        return self.direction == "horizontal" or (self.direction == "auto" and self.page.imageable_w > self.page.imageable_h)
+
+    def _avail(self) -> tuple[float, float]:
+        """The space strips are tiled in, as (across, along): the page's width and height, swapped if horizontal."""
+        p = self.page
+        return (p.imageable_h, p.imageable_w) if self.horizontal else (p.imageable_w, p.imageable_h)
+
+    def _page_rect(self, x: float, y: float, w: float, h: float) -> Rect:
+        """A rectangle in strip space (x across the strip, y along it, origin at the imageable corner) on the page."""
+        p = self.page
+        return Rect(p.left + y, p.top + x, h, w) if self.horizontal else Rect(p.left + x, p.top + y, w, h)
 
     @property
     def frame_h(self) -> float:
@@ -361,11 +379,13 @@ class Strip(Layout):
 
     @property
     def cols(self) -> int:
-        return max(1, int((self.page.imageable_w + self.gutter) // (self.strip_w + self.gutter)))
+        """Strips side by side across their width."""
+        return max(1, int((self._avail()[0] + self.gutter) // (self.strip_w + self.gutter)))
 
     @property
     def rows(self) -> int:
-        return max(1, int((self.page.imageable_h + self.gutter) // (self.strip_h + self.gutter)))
+        """Strips one after another along their length."""
+        return max(1, int((self._avail()[1] + self.gutter) // (self.strip_h + self.gutter)))
 
     @property
     def per_page(self) -> int:
@@ -376,9 +396,10 @@ class Strip(Layout):
         return max(1, ceil_div(len(self.images), self.per_page))
 
     def _strip_xy(self, n: int) -> tuple[float, float]:
-        p = self.page
-        x0 = p.left + (p.imageable_w - (self.cols * self.strip_w + (self.cols - 1) * self.gutter)) / 2
-        y0 = p.top + (p.imageable_h - (self.rows * self.strip_h + (self.rows - 1) * self.gutter)) / 2
+        """Where strip n starts, in strip space (see _page_rect)."""
+        across, along = self._avail()
+        x0 = (across - (self.cols * self.strip_w + (self.cols - 1) * self.gutter)) / 2
+        y0 = (along - (self.rows * self.strip_h + (self.rows - 1) * self.gutter)) / 2
         r, c = divmod(n, self.cols)
         return x0 + c * (self.strip_w + self.gutter), y0 + r * (self.strip_h + self.gutter)
 
@@ -387,16 +408,16 @@ class Strip(Layout):
         for i, img in enumerate(self.images[start:start + self.per_page]):
             n, k = divmod(i, self.frames)
             sx, sy = self._strip_xy(n)
-            out.append((img, Rect(sx + self.padding, sy + self.padding + k * (self.frame_h + self.frame_gap),
-                                  self.strip_w - 2 * self.padding, self.frame_h)))
+            out.append((img, self._page_rect(sx + self.padding, sy + self.padding + k * (self.frame_h + self.frame_gap),
+                                             self.strip_w - 2 * self.padding, self.frame_h)))
         return out
 
     def cut_guides(self, page: int):
         used = ceil_div(len(self.slots(page)), self.frames) if self.slots(page) else 0
         out = []
         for n in range(used):
-            x, y = self._strip_xy(n)
-            x1, y1 = x + self.strip_w, y + self.strip_h
+            r = self._page_rect(*self._strip_xy(n), self.strip_w, self.strip_h)
+            x, y, x1, y1 = r.x, r.y, r.x + r.w, r.y + r.h
             out += [(x, y, x1, y), (x1, y, x1, y1), (x1, y1, x, y1), (x, y1, x, y)]
         return out
 
@@ -894,7 +915,7 @@ class Filmstrip(Strip):
     def __post_init__(self):
         if self.frames < 1 or self.strip_w <= 0:
             raise ValueError("frames and strip width must be positive")
-        h_max = self.page.imageable_h
+        h_max = self._avail()[1]                        # the length the film may use on this page
         for _ in range(2):   # the second pass applies the scale-down
             fw = self.strip_w * 0.686                   # 24 of 35 mm
             self.padding = (self.strip_w - fw) / 2
@@ -915,10 +936,10 @@ class Filmstrip(Strip):
         out: list = []
         for n in range(used):
             x, y = self._strip_xy(n)
-            out.append(("rect", Rect(x, y, w, self.strip_h), (22, 22, 22)))
+            out.append(("rect", self._page_rect(x, y, w, self.strip_h), (22, 22, 22)))
             yy = y + pitch / 2
             while yy + hole_h <= y + self.strip_h - pitch / 4 + 1e-9:
-                out.append(("round", Rect(x + edge, yy, hole_w, hole_h), (255, 255, 255)))
-                out.append(("round", Rect(x + w - edge - hole_w, yy, hole_w, hole_h), (255, 255, 255)))
+                out.append(("round", self._page_rect(x + edge, yy, hole_w, hole_h), (255, 255, 255)))
+                out.append(("round", self._page_rect(x + w - edge - hole_w, yy, hole_w, hole_h), (255, 255, 255)))
                 yy += pitch
         return out

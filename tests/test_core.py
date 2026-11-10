@@ -409,3 +409,59 @@ def test_filmstrip_frames_are_2_to_3_holes_on_both_edges_and_it_fits_the_page():
     assert tall.strip_h <= pg.imageable_h * (1 + 1e-9) and tall.strip_w < 35 * MM
     with pytest.raises(ValueError):
         Filmstrip(page=pg, frames=0)
+
+
+# ---- strip direction ----
+
+def test_strip_direction_auto_follows_the_page_and_can_be_forced():
+    from photosheet.core.layouts import Strip
+    assert not Strip(page=PageExtent(300, 500)).horizontal                       # portrait page: vertical strips
+    assert Strip(page=PageExtent(500, 300)).horizontal                           # landscape page: horizontal strips
+    assert Strip(page=PageExtent(300, 500), direction="horizontal").horizontal
+    assert not Strip(page=PageExtent(500, 300), direction="vertical").horizontal
+    with pytest.raises(ValueError):
+        Strip(direction="sideways")
+
+
+def test_horizontal_strips_put_frames_side_by_side_and_tile_down_the_page():
+    from photosheet.core.layouts import Strip
+    pg = PageExtent(600, 400)
+    s = Strip(page=pg, frames=3, strip_w=100, strip_h=300, padding=10, frame_gap=5, gutter=10)
+    assert s.horizontal and (s.cols, s.rows, s.per_page) == (3, 1, 9)           # 3 strips stack down a 400 pt tall page
+    for i in range(7):
+        s.add(ImageItem(f"{i}.jpg"))
+    rects = [r for _, r in s.slots(0)]
+    assert len(rects) == 7 and _rects_disjoint(rects)
+    first = rects[:3]
+    assert first[0].y == first[1].y == first[2].y                               # one strip = one row of frames...
+    assert first[1].x > first[0].x + first[0].w and first[2].x > first[1].x + first[1].w     # ...running left to right
+    assert abs(first[0].h - (100 - 20)) < 1e-9 and abs(first[0].w - (300 - 20 - 10) / 3) < 1e-9   # across = strip_w, along = strip_h
+    assert rects[3].y > rects[0].y + rects[0].h                                 # the next strip sits below
+    assert all(r.x >= -1e-6 and r.y >= -1e-6 and r.x + r.w <= 600 + 1e-6 and r.y + r.h <= 400 + 1e-6 for r in rects)
+    guides = s.cut_guides(0)
+    assert len(guides) == 3 * 4                                                 # 7 photos = 3 strips, 4 outline lines each
+    xs = [g[0] for g in guides] + [g[2] for g in guides]
+    assert max(xs) - min(xs) <= 300 + 1e-6                                       # each outline is 300 long, flat on the page
+
+
+def test_horizontal_filmstrip_has_landscape_frames_holes_in_the_film_and_fits_the_page_width():
+    from photosheet.core.layouts import MM, Filmstrip
+    pg = PageExtent(842, 595)
+    pg.set_margins(20, 20, 20, 20)
+    f = Filmstrip(page=pg, frames=6)                                             # landscape page: auto = horizontal
+    assert f.horizontal and f.strip_h <= pg.imageable_w + 1e-6 and abs(f.strip_w - 35 * MM) < 1e-6
+    for i in range(7):
+        f.add(ImageItem(f"{i}.jpg"))
+    rects = [r for _, r in f.slots(0)]
+    assert all(abs(r.w / r.h - 1.5) < 1e-9 for r in rects) and _rects_disjoint(rects)       # 36 x 24 mm landscape frames
+    shapes = f.shapes(0)
+    strips = [r for k, r, _ in shapes if k == "rect"]
+    holes = [r for k, r, _ in shapes if k == "round"]
+    assert len(strips) == 2 and all(s.w > s.h for s in strips)                    # wide, flat black strips
+    assert all(any(s.x <= h.x and h.x + h.w <= s.x + s.w and s.y <= h.y and h.y + h.h <= s.y + s.h for s in strips) for h in holes)
+    assert not any(h.x < r.x + r.w and h.x + h.w > r.x and h.y < r.y + r.h and h.y + h.h > r.y for h in holes for r in rects)
+    assert all(s.x >= 20 - 1e-6 and s.x + s.w <= 822 + 1e-6 for s in strips)
+    long = Filmstrip(page=pg, frames=12)                                          # too long for the page width: scaled down
+    assert long.strip_h <= pg.imageable_w * (1 + 1e-9) and long.strip_w < 35 * MM
+    v = Filmstrip(page=pg, frames=6, direction="vertical")                        # forcing vertical on the same landscape page
+    assert not v.horizontal and v.strip_h <= pg.imageable_h + 1e-6 and v.strip_w < 35 * MM
