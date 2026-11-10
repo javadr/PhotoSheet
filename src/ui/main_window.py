@@ -15,7 +15,7 @@ from PySide6.QtCore import QSize, qVersion, QEvent, QObject, QPointF, QRectF, QR
 from PySide6.QtGui import QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
+    QAbstractItemView, QApplication, QStyledItemDelegate, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
     QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
     QFrame, QGraphicsDropShadowEffect, QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
@@ -242,6 +242,44 @@ class _ExportJob(QRunnable):
             self.sig.export_done.emit(res)
         except RuntimeError:
             pass  # window closed meanwhile
+
+
+class _GroupedDelegate(QStyledItemDelegate):
+    """Popup rows: unselectable headings get a tinted band and a rule above (not the first); layouts are indented under them."""
+    PAD, INDENT = 8, 14
+
+    @staticmethod
+    def _is_heading(index) -> bool:
+        return not (index.flags() & Qt.ItemFlag.ItemIsEnabled)
+
+    def sizeHint(self, option, index):
+        sz = super().sizeHint(option, index)
+        if self._is_heading(index):
+            sz.setHeight(sz.height() + (self.PAD if index.row() else 2))   # air above a new group
+        return sz
+
+    def paint(self, painter, option, index):
+        if not self._is_heading(index):
+            option.rect.adjust(self.INDENT, 0, 0, 0)
+            return super().paint(painter, option, index)
+        pal, r = option.palette, option.rect
+        ink, paper = pal.color(QPalette.ColorRole.WindowText), pal.color(QPalette.ColorRole.Window)
+        mix = lambda t: QColor(*(round(a * t + b * (1 - t)) for a, b in zip(ink.getRgb()[:3], paper.getRgb()[:3])))
+        painter.save()
+        top = r.top() + (self.PAD if index.row() else 0)
+        if index.row():
+            painter.setPen(QPen(mix(0.35)))
+            painter.drawLine(r.left(), r.top() + 2, r.right(), r.top() + 2)    # the separator between groups
+        painter.fillRect(r.adjusted(0, top - r.top(), 0, 0), mix(0.10))
+        font = QFont(option.font)
+        font.setBold(True)
+        font.setCapitalization(QFont.Capitalization.AllUppercase)
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 105)
+        painter.setFont(font)
+        painter.setPen(mix(0.85))                                            # secondary ink, about 7:1 on the band
+        painter.drawText(r.adjusted(6, top - r.top(), -6, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                         index.data())
+        painter.restore()
 
 
 class SliderSpin(QWidget):
@@ -613,6 +651,7 @@ class MainWindow(QMainWindow):
             for name in names:
                 model.appendRow(QStandardItem(name))
         self.kind.setModel(model)
+        self.kind.setItemDelegate(_GroupedDelegate(self.kind))
         self.kind.setCurrentText("N-up")
         self.kind.setMaxVisibleItems(40)                      # the whole list fits: no scrolling inside a menu
         self.page_size = QComboBox()
