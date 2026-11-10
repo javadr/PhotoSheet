@@ -7,6 +7,7 @@ from functools import lru_cache
 import os
 import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 
 from dataclasses import replace
 
@@ -33,6 +34,21 @@ _CACHE_PIXELS = 100_000_000  # budget across cached images, roughly 300 MB of RG
 PROXY_SIDE = 2400  # longest side of the cached preview copy
 
 
+def _key(item: ImageItem, printer_profile, proxy: bool) -> tuple:
+    try:
+        mtime = os.stat(item.path).st_mtime_ns
+    except OSError:
+        mtime = 0
+    return (item.path, mtime, item.profile, item.intent, item.flip_h, item.flip_v, item.angle,
+            repr(item.effects), printer_profile, proxy)
+
+
+def uncached(items, printer_profile: str | None = None, proxy: bool = True) -> int:
+    """How many of these photos load() would have to read from disk."""
+    with _CACHE_LOCK:
+        return len({_key(i, printer_profile, proxy) for i in items} - _CACHE.keys())
+
+
 def load(item: ImageItem, printer_profile: str | None = None, proxy: bool = False) -> Image.Image:
     """Cached _load(). The returned image is shared: callers must not modify it in place.
 
@@ -40,20 +56,12 @@ def load(item: ImageItem, printer_profile: str | None = None, proxy: bool = Fals
     shortcut: a preview at more than ~PROXY_SIDE px per photo (huge zoom on a 1-up page)
     is slightly soft; raise PROXY_SIDE or render without fast=True if that matters.
     """
-    try:
-        mtime = os.stat(item.path).st_mtime_ns
-    except OSError:
-        mtime = 0  # _load raises the real error
-    key = (item.path, mtime, item.profile, item.intent, item.flip_h, item.flip_v, item.angle,
-           repr(item.effects), printer_profile, proxy)
+    key = _key(item, printer_profile, proxy)
     with _CACHE_LOCK:
         if key in _CACHE:
             _CACHE.move_to_end(key)
             return _CACHE[key]
-    im = _load(item, printer_profile) if not proxy else load(item, printer_profile)
-    if proxy and max(im.size) > PROXY_SIDE:
-        im = im.copy()
-        im.thumbnail((PROXY_SIDE, PROXY_SIDE), Image.BICUBIC, reducing_gap=2.0)
+    im = _load(item, printer_profile, PROXY_SIDE if proxy else None)
     if im.width * im.height <= _CACHE_PIXELS:
         with _CACHE_LOCK:
             _CACHE[key] = im
@@ -62,10 +70,43 @@ def load(item: ImageItem, printer_profile: str | None = None, proxy: bool = Fals
     return im
 
 
-def _load(item: ImageItem, printer_profile: str | None = None) -> Image.Image:
-    """Open, orient, colour-manage to RGB, flip and apply effects."""
+def _try_load(item, printer_profile, fast):
+    try:
+        load(item, printer_profile, fast)
+    except Exception:
+        pass  # the serial pass that follows raises it again, where it belongs
+
+
+def _prefetch(items, printer_profile, fast, progress=None) -> None:
+    """Decode and colour-manage the photos in parallel (Pillow and lcms release the GIL) so load() hits the cache.
+    progress(done, total) is called from worker threads as each photo finishes."""
+    todo = list({id(i): i for i in items}.values())
+    done = [0]
+
+    def one(item):
+        _try_load(item, printer_profile, fast)
+        done[0] += 1   # shortcut: unlocked counter, an off-by-one in a progress label is harmless
+        if progress:
+            progress(done[0], len(todo))
+
+    if progress:
+        progress(0, len(todo))
+    if len(todo) > 1:
+        with ThreadPoolExecutor(min(len(todo), os.cpu_count() or 2)) as ex:
+            list(ex.map(one, todo))
+    elif todo:
+        one(todo[0])
+
+
+def _load(item: ImageItem, printer_profile: str | None = None, max_side: int | None = None) -> Image.Image:
+    """Open, orient, colour-manage to RGB, flip and apply effects. max_side shrinks first, so previews skip the heavy work."""
     im = Image.open(item.path)
+    if max_side and max(im.size) > max_side:
+        r = max_side / max(im.size)
+        im.draft(None, (math.ceil(im.width * r), math.ceil(im.height * r)))   # JPEG decodes at 1/2, 1/4, 1/8 size for free
     im = ImageOps.exif_transpose(im)
+    if max_side and max(im.size) > max_side and im.mode in ("RGB", "RGBA", "L", "LA", "CMYK"):
+        im.thumbnail((max_side, max_side), Image.BICUBIC, reducing_gap=2.0)   # before the colour transform: far fewer pixels
     embedded = im.info.get("icc_profile")
     src = (ImageCms.getOpenProfile(item.profile) if item.profile
            else ImageCms.ImageCmsProfile(io.BytesIO(embedded)) if embedded else _srgb())
@@ -202,7 +243,7 @@ def _draw_shape(draw: ImageDraw.ImageDraw, kind: str, r: Rect, rgb: tuple, s: fl
 
 
 def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str | None = None,
-                background=(255, 255, 255), fast: bool = False) -> Image.Image:
+                background=(255, 255, 255), fast: bool = False, progress=None) -> Image.Image:
     s = dpi / 72
     p = layout.page
     canvas = Image.new("RGB", (round(p.width * s), round(p.height * s)), background)
@@ -230,7 +271,9 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
             canvas.paste(pic.crop(box), (round(r.x * s), round(r.y * s)))
         return canvas
     if hasattr(layout, "pile"):   # Scatter and Fan: tilted cards with a shadow
-        for item, photo, card, angle in layout.pile(page):
+        pile = layout.pile(page)
+        _prefetch([c[0] for c in pile], printer_profile, fast, progress)
+        for item, photo, card, angle in pile:
             w, h = max(1, round(card.w * s)), max(1, round(card.h * s))
             c = Image.new("RGB", (w, h), (255, 255, 255))
             _place(c, replace(item, crop=True, rotation=0), load(item, printer_profile, fast),
@@ -247,6 +290,7 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         return canvas
     if isinstance(layout, Carousel):
         wedges = layout.wedges()
+        _prefetch([w[0] for w in wedges], printer_profile, fast, progress)
         for i in [*range(0, len(wedges), 2), *range(1, len(wedges), 2)]:  # evens, then odds on top
             item, poly, box = wedges[i]
             tmp = Image.new("RGB", canvas.size, background)
@@ -270,7 +314,9 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         draw.rectangle((card.x * s, card.y * s, (card.x + card.w) * s - 1, (card.y + card.h) * s - 1),
                        fill=(255, 255, 255), outline=(205, 205, 205), width=max(1, round(0.5 * s)))
     polys = layout.outlines(page)
-    for k, (item, slot) in enumerate(layout.slots(page)):
+    slots = layout.slots(page)
+    _prefetch([i for i, _ in slots], printer_profile, fast, progress)
+    for k, (item, slot) in enumerate(slots):
         if polys is not None and k < len(polys):
             _place_cut(canvas, item, load(item, printer_profile, fast), slot, polys[k], s, fast, background)
             continue

@@ -11,8 +11,8 @@ from PySide6.QtGui import QStandardItem, QStandardItemModel, QAction, QColor, QI
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
-    QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox,
-    QFrame, QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
+    QFrame, QGraphicsDropShadowEffect, QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..core import preset
@@ -21,7 +21,7 @@ from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Ben
                             Fan, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic,
                             NUp, Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral,
                             Strip, Timeline, Triptych, aspect, date_sort_key, snap_delta)
-from ..core.render import render_page
+from ..core.render import render_page, uncached
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
          "4 × 6 in": (288, 432), "5 × 7 in": (360, 504), "8 × 10 in": (576, 720)}   # portrait points; Orientation turns them
@@ -153,6 +153,7 @@ class _Edit(QUndoCommand):
 
 class _Signals(QObject):
     done = Signal(int, object)   # generation, QImage or Exception
+    progress = Signal(int, int, int)   # generation, photos finished, photos on the page
 
 
 class _Job(QRunnable):
@@ -165,7 +166,8 @@ class _Job(QRunnable):
         if not self.current():
             return  # superseded while queued: don't burn CPU on it
         try:
-            res = to_qimage(render_page(self.layout, self.page, self.dpi, fast=True))
+            res = to_qimage(render_page(self.layout, self.page, self.dpi, fast=True,
+                                        progress=lambda d, t: self.sig.progress.emit(self.gen, d, t)))
         except Exception as e:  # shown in the status bar; never crash the worker
             res = e
         try:
@@ -368,6 +370,7 @@ class MainWindow(QMainWindow):
         self.page_no, self._gen, self._loading = 0, 0, False
         self.sig = _Signals()
         self.sig.done.connect(self._on_rendered)
+        self.sig.progress.connect(self._on_progress)
         self.pool = QThreadPool.globalInstance()
         self.undo_stack = QUndoStack(self)
 
@@ -398,6 +401,31 @@ class MainWindow(QMainWindow):
         self._build_layout_dock()
         self._build_image_dock()
         self._build_menu()
+        self.busy = QFrame(self.scroll.viewport())   # floating status over the top of the preview while photos load
+        self.busy.setObjectName("busy")
+        self.busy.setMinimumWidth(260)
+        self.busy.setStyleSheet(
+            "#busy { background: palette(window); border: 1px solid palette(mid); border-radius: 10px; }"
+            "QProgressBar { background: palette(midlight); border: none; border-radius: 2px; max-height: 4px; }"
+            "QProgressBar::chunk { background: palette(highlight); border-radius: 2px; }")
+        shadow = QGraphicsDropShadowEffect(self.busy, blurRadius=24, xOffset=0, yOffset=4)
+        shadow.setColor(QColor(0, 0, 0, 70))
+        self.busy.setGraphicsEffect(shadow)
+        self.busy_label, self.busy_count = QLabel("Preparing photos"), QLabel()
+        self.busy_count.setEnabled(False)   # secondary text colour
+        self.busy_bar = QProgressBar(textVisible=False)
+        row = QHBoxLayout()
+        row.addWidget(self.busy_label, 1)
+        row.addWidget(self.busy_count)
+        bl = QVBoxLayout(self.busy)
+        bl.setContentsMargins(16, 12, 16, 14)
+        bl.setSpacing(8)
+        bl.addLayout(row)
+        bl.addWidget(self.busy_bar)
+        self.busy.hide()
+        self._cold = 0
+        self.busy_timer = QTimer(self, singleShot=True, interval=250)   # quick renders never flash a notice
+        self.busy_timer.timeout.connect(self._show_busy)
         self.statusBar().hide()   # only shown while there is an error to report, so it leaves no blank strip
         self.refresh()
 
@@ -1547,6 +1575,8 @@ class MainWindow(QMainWindow):
                 # Ctrl+wheel = zoom (one notch = 120 units = 1.25x); plain wheel scrolls
                 self.set_zoom((self.zoom or self._fit_zoom()) * 1.25 ** (ev.angleDelta().y() / 120))
                 return True
+            if ev.type() == QEvent.Type.Resize:
+                self._place_busy()
             if ev.type() == QEvent.Type.Resize and self.zoom is None:
                 self._rescale_preview()
                 self._fit_timer.start()  # debounce: re-fit once resizing settles
@@ -1586,6 +1616,24 @@ class MainWindow(QMainWindow):
         pm.setDevicePixelRatio(dpr)
         return pm
 
+    def _show_busy(self):
+        if not self._cold:   # photos already loaded: just drawing, which is quick
+            return
+        self.busy.adjustSize()
+        self._place_busy()
+        self.busy.show()
+        self.busy.raise_()
+
+    def _on_progress(self, gen, done, total):
+        if gen != self._gen:
+            return
+        self.busy_bar.setRange(0, total)
+        self.busy_bar.setValue(done)
+        self.busy_count.setText(f"{done} of {total}")
+
+    def _place_busy(self):
+        self.busy.move((self.scroll.viewport().width() - self.busy.width()) // 2, 12)
+
     def refresh(self):
         self.page_no = max(0, min(self.page_no, self.layout_.pages - 1))
         self.page_label.setText(f" {self.page_no + 1} / {self.layout_.pages} ")
@@ -1596,12 +1644,19 @@ class MainWindow(QMainWindow):
         z = self.zoom if self.zoom is not None else self._fit_zoom()
         self._dpr, self._pending_zoom = dpr, z
         gen = self._gen
+        try:   # only this page's photos that are not cached yet; layouts without slots just skip the notice
+            self._cold = uncached([i for i, _ in self.layout_.slots(self.page_no)])
+        except Exception:
+            self._cold = 0
+        self.busy_timer.start()
         self.pool.start(_Job(gen, self.layout_, self.page_no, self.SCREEN_DPI * z * dpr, self.sig,
                              lambda: gen == self._gen))
 
     def _on_rendered(self, gen, res):
         if gen != self._gen:
             return  # a newer render is on its way
+        self.busy_timer.stop()
+        self.busy.hide()
         if isinstance(res, Exception):
             self.statusBar().show()
             self.statusBar().showMessage(f"Render failed: {res}")
