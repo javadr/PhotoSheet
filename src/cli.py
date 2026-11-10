@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import os
 import sys
 
 from .core.geometry import PageExtent
@@ -23,7 +24,8 @@ def build(args) -> NUp | Single | Poster:
     if args.landscape or (args.layout == "brick" and not args.portrait):   # Brick starts on landscape paper
         w, h = h, w
     page = PageExtent(w, h)
-    page.set_margins(*(args.margin,) * 4)
+    if not page.set_margins(*(args.margin,) * 4):
+        raise ValueError(f"--margin {args.margin:g} leaves no printable area on a {args.page} page")
     if args.layout == "nup":
         lay = NUp(page=page, caption=args.caption, marks=args.marks, **grid)
     elif args.layout == "single":
@@ -185,8 +187,14 @@ def main(argv=None) -> int:
     ap.add_argument("--crop", action="store_true")
     ap.add_argument("--printer-profile")
     args = ap.parse_args(argv)
-    pages = render_all(build(args), dpi=args.dpi, printer_profile=args.printer_profile)
-    save_pages(pages, args.out, args.dpi)
+    for path in args.images:   # before any work starts, not after minutes of rendering
+        if not os.path.isfile(path):
+            ap.error(f"no such file: {path}")
+    try:
+        pages = render_all(build(args), dpi=args.dpi, printer_profile=args.printer_profile)
+        save_pages(pages, args.out, args.dpi)
+    except (ValueError, OSError) as e:   # a bad option value, an unreadable photo, an unwritable output
+        ap.error(str(e))
     return 0
 
 

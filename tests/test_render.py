@@ -696,3 +696,11 @@ def test_poster_pages_share_one_canvas(red):
     first = render._POSTER[1]
     render_page(lay, 1, dpi=30)
     assert render._POSTER[1] is first
+
+
+@pytest.mark.parametrize("args", [["--margin", "500"], ["--rows", "0"], ["nope.jpg"]])
+def test_cli_bad_input_is_a_clean_error(tmp_path, red, args):
+    imgs = [] if args[0] == "nope.jpg" else [red]
+    with pytest.raises(SystemExit) as e:   # argparse's error(): message on stderr, exit code 2, no traceback
+        cli.main([*imgs, *args, "-o", str(tmp_path / "o.png"), "--dpi", "20"])
+    assert e.value.code == 2
