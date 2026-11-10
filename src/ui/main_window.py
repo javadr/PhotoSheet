@@ -156,7 +156,7 @@ class _Edit(QUndoCommand):
 class _Signals(QObject):
     done = Signal(int, object)   # generation, QImage or Exception
     progress = Signal(int, int, int)   # generation, photos finished, photos on the page
-    export_progress = Signal(int, int)   # pages rendered, pages in total
+    export_progress = Signal(int, str)   # progress in 1/1000, what is happening
     export_done = Signal(object)   # None, or the Exception
 
 
@@ -203,14 +203,22 @@ class _ExportJob(QRunnable):
         try:
             n = self.layout.pages
             pages = []
+            def report(i, f):   # f = 0..1 through page i; rendering is the first 92% of the bar, saving the rest
+                self.sig.export_progress.emit(int(920 * (i + f) / n), f"Page {i + 1} of {n}")
+
             for i in range(n):
                 if self.cancelled:
                     return
-                pages.append(render_page(self.layout, i, 300, cancel=lambda: self.cancelled))
-                self.sig.export_progress.emit(i + 1, n)
+                # a page is photos loading (60%) then photos being drawn (40%)
+                pages.append(render_page(
+                    self.layout, i, 300, cancel=lambda: self.cancelled,
+                    progress=lambda d, t, i=i: report(i, 0.6 * d / max(t, 1)),
+                    placing=lambda d, t, i=i: report(i, 0.6 + 0.4 * d / max(t, 1))))
+                report(i, 1)
             self.ready.wait()
             if self.cancelled:
                 return
+            self.sig.export_progress.emit(920, "Saving")
             f = self.path
             if f.lower().endswith(".pdf"):
                 pages[0].save(f, save_all=True, append_images=pages[1:], resolution=300)
@@ -218,6 +226,7 @@ class _ExportJob(QRunnable):
                 stem, _, ext = f.rpartition(".")
                 for i, im in enumerate(pages):
                     im.save(f"{stem}-{i + 1}.{ext}" if n > 1 else f, dpi=(300, 300))
+                    self.sig.export_progress.emit(920 + 80 * (i + 1) // n, "Saving")
             res = None
         except Cancelled:
             return
@@ -478,7 +487,9 @@ class MainWindow(QMainWindow):
         self.busy.hide()
         self._cold = 0
         self._export = None   # the running _ExportJob
-        self._export_name, self._export_pages = "", (0, 0)
+        self._export_name, self._export_pm, self._export_stage = "", 0, ""
+        self._creep = QTimer(self, interval=120)   # saving one PDF has no steps to report: ease towards the end
+        self._creep.timeout.connect(self._creep_tick)
         self.sig.export_progress.connect(self._on_export_progress)
         self.sig.export_done.connect(self._on_export_done)
         self.busy_timer = QTimer(self, singleShot=True, interval=250)   # quick renders never flash a notice
@@ -1748,7 +1759,7 @@ class MainWindow(QMainWindow):
         if isinstance(self.layout_, Collage):
             self.layout_.slots(0)   # place new photos on the UI thread first, as refresh() does
         job = self._export = _ExportJob(copy.deepcopy(self.layout_), self.sig)   # snapshot: later edits don't leak in
-        self._export_pages = (0, job.layout.pages)
+        self._export_pm, self._export_stage = 0, ""
         self.pool.start(job)   # rendering runs while the file dialog is open
         f, _ = QFileDialog.getSaveFileName(self, "Export", "sheet.pdf", "PDF (*.pdf);;PNG (*.png)")
         if not f:
@@ -1760,24 +1771,32 @@ class MainWindow(QMainWindow):
         self._export_popup()
 
     def _export_popup(self):
-        done, total = self._export_pages
-        saving = done >= total
         self.busy_label.setText(f"Exporting {self._export_name}")
-        self.busy_bar.setRange(0, 0 if saving else total)   # saving has no known length: indeterminate
-        self.busy_bar.setValue(done)
-        self.busy_count.setText("Saving…" if saving else f"{done} of {total} pages")
+        self.busy_bar.setRange(0, 1000)
+        self.busy_bar.setValue(self._export_pm)
+        self.busy_count.setText(f"{self._export_stage} · {self._export_pm // 10}%")
         self.busy.adjustSize()
         self._place_busy()
         self.busy.show()
         self.busy.raise_()
 
-    def _on_export_progress(self, done, total):
-        self._export_pages = (done, total)
+    def _on_export_progress(self, pm, stage):
+        self._export_pm, self._export_stage = max(self._export_pm, pm), stage
+        if stage == "Saving" and not self._creep.isActive():
+            self._creep.start()
         if self._export and self._export.path:   # the popup only exists once a path is chosen
+            self._export_popup()
+
+    def _creep_tick(self):
+        self._export_pm += max(1, (990 - self._export_pm) // 25)   # slows down, never claims to be finished
+        if self._export_pm >= 990 or not self._export:
+            self._creep.stop()
+        if self._export and self._export.path:
             self._export_popup()
 
     def _on_export_done(self, err):
         self._export = None
+        self._creep.stop()
         if err:
             self.busy.hide()
             QMessageBox.warning(self, "Export", f"Could not export {self._export_name}: {err}")

@@ -249,8 +249,12 @@ def _draw_shape(draw: ImageDraw.ImageDraw, kind: str, r: Rect, rgb: tuple, s: fl
 
 
 def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str | None = None,
-                background=(255, 255, 255), fast: bool = False, progress=None, cancel=None) -> Image.Image:
+                background=(255, 255, 255), fast: bool = False, progress=None, cancel=None, placing=None) -> Image.Image:
     s = dpi / 72
+
+    def placed(k, n):   # placing(done, total) after each photo is drawn
+        if placing:
+            placing(k, n)
 
     def check():
         if cancel and cancel():
@@ -286,8 +290,9 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         pile = layout.pile(page)
         _prefetch([c[0] for c in pile], printer_profile, fast, progress, cancel)
         check()
-        for item, photo, card, angle in pile:
+        for k, (item, photo, card, angle) in enumerate(pile):
             check()
+            placed(k, len(pile))
             w, h = max(1, round(card.w * s)), max(1, round(card.h * s))
             c = Image.new("RGB", (w, h), (255, 255, 255))
             _place(c, replace(item, crop=True, rotation=0), load(item, printer_profile, fast),
@@ -306,8 +311,9 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         wedges = layout.wedges()
         _prefetch([w[0] for w in wedges], printer_profile, fast, progress, cancel)
         check()
-        for i in [*range(0, len(wedges), 2), *range(1, len(wedges), 2)]:  # evens, then odds on top
+        for k, i in enumerate([*range(0, len(wedges), 2), *range(1, len(wedges), 2)]):  # evens, then odds on top
             check()
+            placed(k, len(wedges))
             item, poly, box = wedges[i]
             tmp = Image.new("RGB", canvas.size, background)
             _place(tmp, replace(item, crop=True, rotation=0, mask=None), load(item, printer_profile, fast), box, s, fast)
@@ -335,6 +341,7 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
     check()
     for k, (item, slot) in enumerate(slots):
         check()
+        placed(k, len(slots))
         if polys is not None and k < len(polys):
             _place_cut(canvas, item, load(item, printer_profile, fast), slot, polys[k], s, fast, background)
             continue
