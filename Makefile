@@ -3,6 +3,7 @@ VER=$(shell grep __version__ src/__init__.py|cut -d= -f2|tr -d '\" ')
 HAS_UV := $(shell command -v uv >/dev/null 2>&1 && echo 1)
 PKG_TOOL := $(if $(HAS_UV),uv pip,pip)
 BUILD_TOOL := $(if $(HAS_UV),uv build,python -m build)
+TWINE := $(if $(HAS_UV),uvx twine,twine)
 
 VENV:=$(shell echo "$${VIRTUAL_ENV-}")
 BIN:=$(if $(VENV),$(VIRTUAL_ENV)/bin,$(HOME)/.local/bin)
@@ -67,7 +68,21 @@ uninstall: ## Uninstall photosheet and remove its desktop file
 	rm -fv $(APP_DESKTOP) $(APP_ICON)
 
 setup: ver ## Build source and wheel distribution packages
+	@rm -rf dist
 	$(BUILD_TOOL)
+	$(TWINE) check dist/photosheet-$(VER)*
+
+.PHONY: publish-pypi
+publish-pypi: setup ## Publish the package to PyPI
+	$(TWINE) upload dist/photosheet-$(VER)*
+
+.PHONY: publish-testpypi
+publish-testpypi: setup ## Publish the package to TestPyPI
+	$(TWINE) upload -r testpypi dist/photosheet-$(VER)*
+
+upload: setup ## Publish the package to TestPyPI first, then to PyPI
+	$(TWINE) upload -r testpypi dist/photosheet-$(VER)*
+	$(TWINE) upload dist/photosheet-$(VER)*
 
 .PHONY: compile-pyinstaller
 compile-pyinstaller: ver ## Build a standalone binary with PyInstaller (in a throwaway venv, Linux)
@@ -82,5 +97,7 @@ clean: ver ## Clean build artifacts
 	@find . -name __pycache__ -type d -not -path './.venv/*' -prune -exec rm -rfv {} +
 
 # Aliases
-.PHONY: lins
+.PHONY: lins upypi utest
 lins: install-dev
+upypi: publish-pypi
+utest: publish-testpypi
