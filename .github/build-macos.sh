@@ -8,7 +8,7 @@ export CURRENT_VERSION="$version"
 
 pyinstaller --windowed --clean --noupx -i src/icons/photosheet.icns \
 	--osx-bundle-identifier io.github.photosheet \
-	--collect-data photosheet packaging/launcher.py -n PhotoSheet
+	--collect-data photosheet .github/launcher.py -n PhotoSheet
 
 # ditto keeps the bundle's symlinks and permissions, which plain zip would break.
 ditto -c -k --keepParent dist/PhotoSheet.app "dist/photosheet-v$version-macos.zip"
