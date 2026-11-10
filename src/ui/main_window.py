@@ -917,6 +917,8 @@ class MainWindow(QMainWindow):
         if self._scrolled_kind != k:                       # a different layout starts at the top of its options
             self._scrolled_kind = k
             self.layout_pane.scroll_to_top()
+            # Qt only grows a dock to fit; ask for 1 px so it clamps to this layout's minimum, wider or narrower.
+            QTimer.singleShot(0, lambda: self.resizeDocks([self.layout_dock], [1], Qt.Orientation.Horizontal))
 
     def _layout_changed(self, *_):
         if self._loading:
