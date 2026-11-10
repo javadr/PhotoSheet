@@ -17,6 +17,10 @@ help: ## Show this help message
 ver: ## Show the version number
 	@echo photosheet, Ver. $(VER)
 
+.PHONY: version
+version: ## Show the version with the colourful banner
+	@python -m src --version
+
 .PHONY: run
 run: ## Run the GUI straight from the source tree (no install needed)
 	python -m src
