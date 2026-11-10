@@ -15,7 +15,7 @@ from PIL import Image, ImageCms, ImageChops, ImageDraw, ImageFilter, ImageFont, 
 
 from .effects import apply_effects
 from .geometry import Rect, Rotation, fit
-from .layouts import Carousel, ImageItem, Layout, Poster, Triptych
+from .layouts import Carousel, Collage, ImageItem, Layout, Poster, Triptych
 
 _SRGB = None
 
@@ -335,6 +335,19 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
     for card in layout.cards(page):   # white cards sit under the photos
         draw.rectangle((card.x * s, card.y * s, (card.x + card.w) * s - 1, (card.y + card.h) * s - 1),
                        fill=(255, 255, 255), outline=(205, 205, 205), width=max(1, round(0.5 * s)))
+    if isinstance(layout, Collage):   # the box keeps the photo's shape; the whole box turns about its centre
+        slots = [(replace(i, angle=0), r, i.angle) for i, r in layout.slots(page)]
+        _prefetch([i for i, _, _ in slots], printer_profile, fast, progress, cancel)
+        for k, (item, r, angle) in enumerate(slots):
+            check()
+            placed(k, len(slots))
+            w, h = max(1, round(r.w * s)), max(1, round(r.h * s))
+            tmp = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            _place(tmp, item, load(item, printer_profile, fast), Rect(0, 0, r.w, r.h), s, fast)
+            if angle:
+                tmp = tmp.rotate(-angle, Image.BICUBIC, expand=True)   # PIL turns counter-clockwise
+            canvas.paste(tmp, (round((r.x + r.w / 2) * s - tmp.width / 2), round((r.y + r.h / 2) * s - tmp.height / 2)), tmp)
+        return canvas
     polys = layout.outlines(page)
     slots = layout.slots(page)
     _prefetch([i for i, _ in slots], printer_profile, fast, progress, cancel)

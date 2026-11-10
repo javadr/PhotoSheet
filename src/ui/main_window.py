@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import datetime
 import os
 import sys
@@ -411,6 +412,11 @@ class _PageLabel(QLabel):
             elif kind == "sel":                      # outline of the selected Collage photo
                 p.setPen(QPen(hl, 2))
                 p.setBrush(Qt.BrushStyle.NoBrush)
+            elif kind == "rot":                      # the rotate knob: a round handle
+                p.setPen(QPen(QColor(255, 255, 255), 1))
+                p.setBrush(hl)
+                p.drawEllipse(shape)
+                continue
             elif kind == "handle":
                 p.setPen(QPen(QColor(255, 255, 255), 1))
                 p.setBrush(hl)
@@ -1464,6 +1470,33 @@ class MainWindow(QMainWindow):
     def _pt_to_widget(self, x: float, y: float) -> QPointF:
         return self._slot_rect(Rect(x, y, 0, 0)).topLeft()
 
+    def _box_corners(self, item, slot) -> list[QPointF]:
+        """Corners (top-left, top-right, bottom-left, bottom-right) of a Collage box turned by its angle, in widget px."""
+        r = self._slot_rect(slot)
+        c, t = r.center(), math.radians(item.angle)
+        co, si = math.cos(t), math.sin(t)
+        return [QPointF(c.x() + sx * r.width() / 2 * co - sy * r.height() / 2 * si,
+                        c.y() + sx * r.width() / 2 * si + sy * r.height() / 2 * co)
+                for sy in (-1, 1) for sx in (-1, 1)]
+
+    def _rot_handle(self, item, slot) -> tuple[QPointF, QPointF]:
+        """(middle of the top edge, the rotate handle 26 px beyond it) of a Collage box, in widget px."""
+        pts = self._box_corners(item, slot)
+        top = (pts[0] + pts[1]) / 2
+        t = math.radians(item.angle)
+        return top, QPointF(top.x() + 26 * math.sin(t), top.y() - 26 * math.cos(t))
+
+    def _sel_overlay(self, item, slot) -> list:
+        pts = self._box_corners(item, slot)
+        top, knob = self._rot_handle(item, slot)
+        return [(QPolygonF([pts[0], pts[1], pts[3], pts[2]]), "sel"), (QPolygonF([top, knob]), "sel")] + [
+            (QRectF(pt.x() - HANDLE, pt.y() - HANDLE, 2 * HANDLE, 2 * HANDLE), "handle") for pt in pts] + [
+            (QRectF(knob.x() - HANDLE - 1, knob.y() - HANDLE - 1, 2 * HANDLE + 2, 2 * HANDLE + 2), "rot")]
+
+    def _on_rot_handle(self, pos, item, slot) -> bool:
+        k = self._rot_handle(item, slot)[1]
+        return abs(pos.x() - k.x()) <= HANDLE + 4 and abs(pos.y() - k.y()) <= HANDLE + 4
+
     def _refresh_overlay(self):
         """Selection outline and resize handles for the selected Collage photo."""
         if not isinstance(self.layout_, Collage) or self._cl:
@@ -1472,15 +1505,11 @@ class MainWindow(QMainWindow):
         slots = dict(self._slots_now())
         row = self.list.currentRow()
         if row in slots:
-            r = self._slot_rect(slots[row])
-            ov.append((r, "sel"))
-            for pt in (r.topLeft(), r.topRight(), r.bottomLeft(), r.bottomRight()):
-                ov.append((QRectF(pt.x() - HANDLE, pt.y() - HANDLE, 2 * HANDLE, 2 * HANDLE), "handle"))
+            ov = self._sel_overlay(self.layout_.images[row], slots[row])
         self.preview.overlay = ov
         self.preview.update()
 
-    def _corner_at(self, pos, rect: QRectF):
-        corners = (rect.topLeft(), rect.topRight(), rect.bottomLeft(), rect.bottomRight())
+    def _corner_at(self, pos, corners):
         for c, pt in enumerate(corners):
             if abs(pos.x() - pt.x()) <= HANDLE + 3 and abs(pos.y() - pt.y()) <= HANDLE + 3:
                 return c
@@ -1500,39 +1529,52 @@ class MainWindow(QMainWindow):
         snap = lay.snap and not (mods & Qt.KeyboardModifier.ControlModifier)
         tol = 6 / cl["k"]
         xs, ys = lay.snap_targets(skip=cl["idx"])
-        if cl["mode"] == "move":
+        if cl["mode"] == "rotate":                              # the knob follows the mouse; 15 deg steps unless Ctrl
+            c = self._slot_rect(Rect(x, y, w, h)).center()
+            v = ev.position() - c
+            ang = math.degrees(math.atan2(v.x(), -v.y()))
+            ang = ang if mods & Qt.KeyboardModifier.ControlModifier else round(ang / 15) * 15
+            cl["item"].angle = ang = (ang + 180) % 360 - 180
+            self._loading = True                                # show it in the Rotate box without re-triggering an edit
+            self.angle.setValue(ang)
+            self._loading = False
+            new, snap = lay.clamp((x, y, w, h), ang), False
+        elif cl["mode"] == "move":
             nx, ny = x + dx, y + dy
             if snap:
                 sx = snap_delta([nx, nx + w / 2, nx + w], xs, tol)
                 sy = snap_delta([ny, ny + h / 2, ny + h], ys, tol)
                 nx += sx or 0.0
                 ny += sy or 0.0
-            new = lay.clamp((nx, ny, w, h))
+            new = lay.clamp((nx, ny, w, h), cl["item"].angle)
         else:
             c = cl["corner"]                                   # 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
-            ax = x if c in (1, 3) else x + w                   # the opposite corner stays where it is
-            ay = y if c in (2, 3) else y + h
-            mx = (x + w if c in (1, 3) else x) + dx
-            my = (y + h if c in (2, 3) else y) + dy
-            if snap:
-                mx += snap_delta([mx], xs, tol) or 0.0
-                my += snap_delta([my], ys, tol) or 0.0
+            sx, sy = (1 if c in (1, 3) else -1), (1 if c in (2, 3) else -1)
+            ang = cl["item"].angle
+            co, si = math.cos(math.radians(ang)), math.sin(math.radians(ang))
+            cx0, cy0 = x + w / 2, y + h / 2
+            ax, ay = -sx * w / 2, -sy * h / 2                  # the opposite corner stays put (box frame, from the centre)
+            mx = sx * w / 2 + dx * co + dy * si                # mouse moved into the box frame
+            my = sy * h / 2 - dx * si + dy * co
+            if snap and not ang:
+                mx += snap_delta([cx0 + mx], xs, tol) or 0.0
+                my += snap_delta([cy0 + my], ys, tol) or 0.0
             nw, nh = max(abs(mx - ax), 12.0), max(abs(my - ay), 12.0)
-            pg = lay.page                                       # the growing edge stops at the page margin;
-            room_w = (pg.left + pg.imageable_w - ax) if c in (1, 3) else (ax - pg.left)   # the held corner never moves
-            room_h = (pg.top + pg.imageable_h - ay) if c in (2, 3) else (ay - pg.top)
+            pg = lay.page                                       # the growing edge stops at the page margin (unturned only)
+            room_w = room_h = float("inf")
+            if not ang:
+                room_w = (pg.left + pg.imageable_w - (cx0 + ax)) if sx > 0 else (cx0 + ax - pg.left)
+                room_h = (pg.top + pg.imageable_h - (cy0 + ay)) if sy > 0 else (cy0 + ay - pg.top)
             if free:
                 nw, nh = min(nw, room_w), min(nh, room_h)
             else:                                               # keep the photo's shape: follow the bigger change
                 k = min(max(nw / w, nh / h), room_w / w, room_h / h)
                 nw, nh = w * k, h * k
-            nx = ax if c in (1, 3) else ax - nw
-            ny = ay if c in (2, 3) else ay - nh
-            new = lay.clamp((nx, ny, nw, nh))
+            lx, ly = ax + sx * nw / 2, ay + sy * nh / 2         # new centre in the box frame, then back to the page
+            ncx, ncy = cx0 + lx * co - ly * si, cy0 + lx * si + ly * co
+            new = lay.clamp((ncx - nw / 2, ncy - nh / 2, nw, nh), ang)
         cl["item"].box = tuple(new)
-        r = self._slot_rect(Rect(*new))
-        ov = [(r, "sel")] + [(QRectF(pt.x() - HANDLE, pt.y() - HANDLE, 2 * HANDLE, 2 * HANDLE), "handle")
-                             for pt in (r.topLeft(), r.topRight(), r.bottomLeft(), r.bottomRight())]
+        ov = self._sel_overlay(cl["item"], Rect(*new))
         p = lay.page
         top, bottom = self._pt_to_widget(0, 0), self._pt_to_widget(p.width, p.height)
         if snap:                                                # draw the guide lines that were hit
@@ -1558,9 +1600,12 @@ class MainWindow(QMainWindow):
             row = self.list.currentRow()
             mode = idx = corner = None
             if row in slots:                                    # the selected photo's handles win over photos beneath
-                corner = self._corner_at(pos, self._slot_rect(slots[row]))
-                if corner is not None:
-                    mode, idx = "resize", row
+                if self._on_rot_handle(pos, lay.images[row], slots[row]):
+                    mode, idx = "rotate", row
+                else:
+                    corner = self._corner_at(pos, self._box_corners(lay.images[row], slots[row]))
+                    if corner is not None:
+                        mode, idx = "resize", row
             if mode is None:
                 hit = self._slot_at(pos)                        # topmost photo under the cursor
                 if hit:
@@ -1570,9 +1615,11 @@ class MainWindow(QMainWindow):
             self.list.setCurrentRow(idx)
             z = self.zoom if self.zoom is not None else self._fit_zoom()
             r = slots[idx]
-            self._cl = dict(mode=mode, idx=idx, corner=corner, start=pos, box0=(r.x, r.y, r.w, r.h),
+            self._cl = dict(mode=mode, idx=idx, corner=corner, start=pos, box0=(r.x, r.y, r.w, r.h), angle0=lay.images[idx].angle,
                             k=self.SCREEN_DPI * z / 72, before=copy.deepcopy(lay.images), moved=False,
                             item=lay.images[idx])
+            if mode == "rotate":
+                self.preview.setCursor(Qt.CursorShape.ClosedHandCursor)
             return True
         if t == QEvent.Type.MouseMove:
             if self._cl and ev.buttons() & left:
@@ -1581,8 +1628,10 @@ class MainWindow(QMainWindow):
             if not ev.buttons():
                 slots = dict(self._slots_now())
                 row = self.list.currentRow()
-                corner = self._corner_at(ev.position(), self._slot_rect(slots[row])) if row in slots else None
-                if corner is not None:
+                corner = self._corner_at(ev.position(), self._box_corners(lay.images[row], slots[row])) if row in slots else None
+                if row in slots and self._on_rot_handle(ev.position(), lay.images[row], slots[row]):
+                    shape = Qt.CursorShape.OpenHandCursor
+                elif corner is not None:
                     shape = Qt.CursorShape.SizeFDiagCursor if corner in (0, 3) else Qt.CursorShape.SizeBDiagCursor
                 elif self._slot_at(ev.position()):
                     shape = Qt.CursorShape.SizeAllCursor
@@ -1592,8 +1641,8 @@ class MainWindow(QMainWindow):
             return False
         if t == QEvent.Type.MouseButtonRelease and ev.button() == left and self._cl:
             cl, self._cl = self._cl, None
-            if cl["moved"] and cl["item"].box != tuple(cl["box0"]):
-                self.undo_stack.push(_Edit(self, "Move Photo" if cl["mode"] == "move" else "Resize Photo",
+            if cl["moved"] and (cl["item"].box != tuple(cl["box0"]) or cl["item"].angle != cl["angle0"]):
+                self.undo_stack.push(_Edit(self, {"move": "Move Photo", "resize": "Resize Photo", "rotate": "Rotate Photo"}[cl["mode"]],
                                            cl["before"], copy.deepcopy(lay.images)))
             self.refresh()
             self._refresh_overlay()

@@ -699,8 +699,13 @@ class Collage(Layout):
         by_id = {id(img): r for img, r in paged[0]}
         for img in self.images:
             r = by_id.get(id(img))
-            if r:
-                img.box = (r.x, r.y, r.w, r.h)
+            if r:   # r bounds the turned photo; the box is the photo's own shape, centred in it
+                t = math.radians(img.angle)
+                c, sn = abs(math.cos(t)), abs(math.sin(t))
+                a0 = aspect(replace(img, angle=0))
+                w = r.w / (c + sn / a0)
+                h = w / a0
+                img.box = (r.x + (r.w - w) / 2, r.y + (r.h - h) / 2, w, h)
 
     def _place_new(self, item: ImageItem, n: int) -> None:
         p = self.page
@@ -721,17 +726,21 @@ class Collage(Layout):
             for n, it in enumerate(missing, start=len(self.images) - len(missing)):
                 self._place_new(it, n)
 
-    def clamp(self, box: tuple) -> tuple:
-        """Keep a box inside the imageable area, shrinking it (same shape) if it is bigger than the area."""
+    def clamp(self, box: tuple, angle: float = 0.0) -> tuple:
+        """Keep the box, as turned by `angle`, inside the imageable area, shrinking it (same shape) if it is bigger."""
         p = self.page
         x, y, w, h = box
-        k = min(1.0, p.imageable_w / w, p.imageable_h / h)
-        w, h = w * k, h * k
-        return (min(max(x, p.left), p.left + p.imageable_w - w), min(max(y, p.top), p.top + p.imageable_h - h), w, h)
+        t = math.radians(angle)
+        c, sn = abs(math.cos(t)), abs(math.sin(t))
+        bw, bh = w * c + h * sn, w * sn + h * c   # bounding box of the turned box, same centre
+        k = min(1.0, p.imageable_w / bw, p.imageable_h / bh)
+        cx = min(max(x + w / 2, p.left + bw * k / 2), p.left + p.imageable_w - bw * k / 2)
+        cy = min(max(y + h / 2, p.top + bh * k / 2), p.top + p.imageable_h - bh * k / 2)
+        return (cx - w * k / 2, cy - h * k / 2, w * k, h * k)
 
     def slots(self, page: int):
         self._ensure()
-        return [(img, Rect(*self.clamp(img.box))) for img in self.images]
+        return [(img, Rect(*self.clamp(img.box, img.angle))) for img in self.images]
 
     def snap_targets(self, skip: int | None = None) -> tuple[list[float], list[float]]:
         """x and y positions a moving photo can snap to: page edges and centre, and other photos' edges and centres."""

@@ -1490,3 +1490,22 @@ def test_brick_starts_on_landscape_paper_other_layouts_on_portrait_and_a_choice_
         w6 = MainWindow()
         w6.kind.setCurrentText(kind)
         assert w6.orient.currentText() == "Portrait", kind
+
+
+def test_collage_rotate_handle_turns_the_box_and_undoes(app, tmp_path):
+    w = _collage_window(app, tmp_path)
+    w.list.setCurrentRow(0)
+    w._refresh_overlay()
+    slot = dict(w._slots_now())[0]
+    it = w.layout_.images[0]
+    top, knob = w._rot_handle(it, slot)
+    assert w._on_rot_handle(knob, it, slot)
+    c = w._slot_rect(slot).center()
+    end = c + QPointF(100, 0)                                    # straight right of the centre = 90 degrees
+    _mouse(app, w, "press", knob)
+    _mouse(app, w, "move", (knob + end) / 2)
+    _mouse(app, w, "move", end)
+    _mouse(app, w, "release", end)
+    assert it.angle == 90
+    w.undo_stack.undo()
+    assert w.layout_.images[0].angle == 0
