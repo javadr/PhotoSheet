@@ -700,3 +700,174 @@ def test_scatter_is_repeatable_stays_on_the_page_and_the_seed_changes_the_pile(t
 def aspect(item):
     from photosheet.core.layouts import aspect as _a
     return _a(item)
+
+
+# ---- Slant, Fan, Brick, Timeline ----
+
+def _jpeg(tmp_path, name, w=60, h=40, when=None, ifd=False):
+    from PIL import Image
+    p = tmp_path / name
+    im = Image.new("RGB", (w, h), (90, 120, 200))
+    if when:
+        ex = Image.Exif()
+        if ifd:
+            ex.get_ifd(0x8769)[36867] = when
+        else:
+            ex[306] = when
+        im.save(p, exif=ex)
+    else:
+        im.save(p)
+    return ImageItem(str(p))
+
+
+def test_slant_panels_are_parallelograms_that_keep_the_gutter_and_fit_the_page():
+    import math
+
+    from photosheet.core.layouts import Slant
+    pg = PageExtent(600, 800)
+    pg.set_margins(20, 20, 20, 20)
+    for angle in (14, -14, 0, 40):
+        s = Slant(page=pg, panels=4, slant=angle, gutter=10)
+        for i in range(6):
+            s.add(ImageItem(f"{i}.jpg"))
+        polys = s.outlines(0)
+        assert len(polys) == 4 and s.pages == 2 and len(s.outlines(1)) == 2
+        for poly in polys:
+            (ax, ay), (bx, by), (cx, cy), (dx, dy) = poly
+            assert ay == by == 20 and cy == dy == 780                               # panels run the full height
+            assert abs((bx - ax) - (cx - dx)) < 1e-9                                # opposite sides equal: a parallelogram
+            assert all(20 - 1e-6 <= x <= 580 + 1e-6 for x, _ in poly)                # inside the page
+        gaps = [polys[i + 1][0][0] + (polys[i + 1][3][0] - polys[i + 1][0][0]) / 2 - (polys[i][1][0] + (polys[i][2][0] - polys[i][1][0]) / 2)
+                for i in range(3)]
+        assert all(abs(g - (gaps[0])) < 1e-6 for g in gaps) and gaps[0] >= 10 - 1e-6   # evenly spaced, gutter kept
+        rects = [r for _, r in s.slots(0)]
+        assert all(r.x >= 20 - 1e-6 and r.x + r.w <= 580 + 1e-6 for r in rects)
+    wide = Slant(page=pg, panels=4, slant=40, gutter=10)                                    # too much lean for a portrait page
+    assert wide.slant_limited and 20 < wide.effective_slant < 40
+    assert abs(wide.effective_slant - math.degrees(math.atan(0.6 * 560 / 760))) < 1e-9
+    assert all(abs(abs(p[1][0] - p[0][0]) - (0.4 * 560 - 3 * 10) / 4) < 1e-9 for p in wide._polys())   # what is left after the lean and gutters
+    assert not Slant(page=pg, panels=4, slant=14).slant_limited and Slant(page=pg, slant=-40).effective_slant < 0
+    right, left = Slant(page=pg, slant=20), Slant(page=pg, slant=-20)
+    assert right.outlines(0) == [] and right._polys()[0][0][0] > right._polys()[0][3][0]   # leans right: the top is further right
+    assert left._polys()[0][0][0] < left._polys()[0][3][0]                                  # leans left
+    for bad in (dict(panels=1), dict(panels=13), dict(slant=41), dict(slant=-41), dict(gutter=-1)):
+        with pytest.raises(ValueError):
+            Slant(**bad)
+
+
+def test_fan_cards_pivot_symmetrically_fill_the_page_and_the_last_card_is_on_top():
+    import math
+
+    from photosheet.core.layouts import Fan
+    pg = PageExtent(842, 595)
+    pg.set_margins(24, 24, 24, 24)
+    f = Fan(page=pg, photos=5, spread=60, border=0.06)
+    assert f.pile(0) == []                                                           # no photos yet
+    for i in range(7):
+        f.add(ImageItem(f"{i}.jpg"))
+    assert f.pages == 2 and len(f.pile(0)) == 5 and len(f.pile(1)) == 2
+    pile = f.pile(0)
+    angles = [a for *_, a in pile]
+    assert angles == sorted(angles, reverse=True) and abs(angles[0] + angles[-1]) < 1e-9 and abs(angles[0] - 30) < 1e-9   # symmetric, 60 apart
+    assert abs(angles[2]) < 1e-9                                                     # the middle card stands straight
+    cards = [c for _, _, c, _ in pile]
+    assert all(abs(c.w / c.h - 0.72) < 1e-9 for c in cards) and len({round(c.w, 6) for c in cards}) == 1   # one card shape
+    for item, photo, card, ang in pile:
+        assert card.x < photo.x and card.y < photo.y and photo.x + photo.w < card.x + card.w
+        assert card.y + card.h - (photo.y + photo.h) > photo.y - card.y              # thicker bottom edge, like an instant print
+        t = math.radians(abs(ang))
+        hw, hh = (card.w * math.cos(t) + card.h * math.sin(t)) / 2, (card.w * math.sin(t) + card.h * math.cos(t)) / 2
+        cx, cy = card.x + card.w / 2, card.y + card.h / 2
+        assert cx - hw >= 24 - 1e-6 and cx + hw <= 818 + 1e-6 and cy - hh >= 24 - 1e-6 and cy + hh <= 571 + 1e-6   # tilted card fits
+    xs = [c.x + c.w / 2 for c in cards]
+    assert xs == sorted(xs)                                                          # left to right, so the right-most is on top
+    assert abs((xs[0] + xs[-1]) / 2 - 421) < 1e-6                                    # the fan is centred on the page
+    one = Fan(page=pg, photos=5)
+    one.add(ImageItem("a.jpg"))
+    assert one.pile(0)[0][3] == 0
+    for bad in (dict(photos=0), dict(photos=13), dict(spread=5), dict(spread=130), dict(border=0.01), dict(border=0.2)):
+        with pytest.raises(ValueError):
+            Fan(**bad)
+
+
+def test_brick_rows_are_staggered_and_never_overlap():
+    from photosheet.core.layouts import Brick
+    pg = PageExtent(400, 600)
+    b = Brick(page=pg, columns=3, rows=4, gutter=10)
+    assert b.per_page == 3 + 2 + 3 + 2                                               # odd rows have one tile fewer
+    for i in range(12):
+        b.add(ImageItem(f"{i}.jpg"))
+    assert b.pages == 2 and len(b.slots(0)) == 10 and len(b.slots(1)) == 2
+    rects = [r for _, r in b.slots(0)]
+    assert _rects_disjoint(rects) and len({(round(r.w, 6), round(r.h, 6)) for r in rects}) == 1   # equal tiles
+    row0, row1 = rects[:3], rects[3:5]
+    assert row0[0].x == 0 and abs(row1[0].x - (row0[0].w + 10) / 2) < 1e-9           # the second row is shifted half a tile
+    assert row1[0].x > row0[0].x and row1[0].x + row1[0].w < row0[1].x + row0[1].w   # and each of its tiles sits between two above
+    assert all(r.x >= -1e-6 and r.x + r.w <= 400 + 1e-6 and r.y + r.h <= 600 + 1e-6 for r in rects)
+    assert abs(rects[0].y) < 1e-9 and abs(rects[-1].y + rects[-1].h - 600) < 1e-6    # the rows fill the page height
+    for bad in (dict(columns=1), dict(rows=0), dict(gutter=-1)):
+        with pytest.raises(ValueError):
+            Brick(**bad)
+
+
+def test_exif_dates_read_format_fall_back_and_sort(tmp_path):
+    import datetime
+
+    from photosheet.core.layouts import date_sort_key, date_text, taken
+    a = _jpeg(tmp_path, "paris.jpg", when="2024:03:02 10:00:00")                       # DateTime
+    b = _jpeg(tmp_path, "rome.jpg", when="2023:12:25 08:30:00", ifd=True)               # DateTimeOriginal
+    c = _jpeg(tmp_path, "nodate.jpg")
+    assert taken(a) == datetime.datetime(2024, 3, 2, 10, 0) and taken(b) == datetime.datetime(2023, 12, 25, 8, 30)
+    assert taken(c) is None and taken(ImageItem("/nonexistent.jpg")) is None            # no EXIF / missing file: no date, no crash
+    assert date_text(a) == "2 Mar 2024" and date_text(b) == "25 Dec 2023"              # fixed English month names
+    assert date_text(c) == "nodate" and date_text(ImageItem("/x/y/Holiday 1.png")) == "Holiday 1"
+    assert date_sort_key(b) < date_sort_key(a)                                          # the older photo sorts first
+    ordered = sorted([a, c, b], key=date_sort_key)
+    assert ordered[0] is b and ordered[1] is a                                          # undated falls back to the file's own time
+    bad = tmp_path / "broken.jpg"
+    bad.write_bytes(b"not a jpeg")
+    assert taken(ImageItem(str(bad))) is None
+
+
+def test_timeline_alternates_sides_keeps_order_and_captions_with_dates(tmp_path):
+    from photosheet.core.layouts import Timeline
+    pg = PageExtent(600, 800)
+    pg.set_margins(20, 20, 20, 20)
+    t = Timeline(page=pg, photos=6, gutter=10)
+    items = [_jpeg(tmp_path, f"p{i}.jpg", when=f"2024:0{i + 1}:1{i} 10:00:00") for i in range(7)]
+    for it in items:
+        t.add(it)
+    assert t.pages == 2 and len(t.slots(0)) == 6 and len(t.slots(1)) == 1
+    rects = [r for _, r in t.slots(0)]
+    mid = 300
+    sides = [("left" if r.x + r.w / 2 < mid else "right") for r in rects]
+    assert sides == ["left", "right"] * 3                                              # alternating around the line
+    assert all(r.x + r.w <= mid - 6 + 1e-6 for r, s in zip(rects, sides) if s == "left")
+    assert all(r.x >= mid + 6 - 1e-6 for r, s in zip(rects, sides) if s == "right")    # nothing crosses the line
+    ys = [r.y for r in rects]
+    assert ys == sorted(ys)                                                            # top to bottom in list order
+    left, right = rects[0::2], rects[1::2]
+    assert _rects_disjoint(left) and _rects_disjoint(right)                            # same-side photos never overlap
+    caps = t.captions(0)
+    assert [c[0] for c in caps][:2] == ["10 Jan 2024", "11 Feb 2024"]                  # dates from the photos
+    for (text, band), (_, r) in zip(caps, t.slots(0)):
+        assert band.y >= r.y + r.h - 1e-6 and band.x == r.x                            # each caption sits under its photo
+    shapes = t.shapes(0)
+    assert sum(1 for k, _, _ in shapes if k == "ellipse") == 6                         # one dot per photo
+    assert all(0 <= r.x and r.x + r.w <= 600 and 0 <= r.y and r.y + r.h <= 800 for _, r, _ in shapes)
+    t.dates = False
+    assert t.captions(0) == [] and all(abs(r.h - c.h) < 1e-6 for (_, r), (_, c, _) in zip(t.slots(0), t._cells(0)[0]))   # no caption band
+    land = Timeline(page=PageExtent(842, 595), photos=5)
+    for it in items[:5]:
+        land.add(it)
+    lr = [r for _, r in land.slots(0)]
+    xs = [r.x for r in lr]
+    assert xs == sorted(xs) and [("above" if r.y + r.h / 2 < 297.5 else "below") for r in lr] == ["above", "below"] * 2 + ["above"]
+    solo = Timeline(page=pg)
+    solo.add(items[0])
+    (_, only), = solo.slots(0)
+    assert abs(only.y + only.h / 2 - 400) < 80                                         # a lone photo sits mid-page
+    assert Timeline(page=pg).slots(0) == [] and Timeline(page=pg).shapes(0) == []
+    for bad in (dict(photos=0), dict(photos=13), dict(gutter=-1)):
+        with pytest.raises(ValueError):
+            Timeline(**bad)

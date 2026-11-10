@@ -8,7 +8,8 @@ import sys
 from .core.geometry import PageExtent
 from .core.layouts import (BENTO, MM, RECIPES, SHAPE_NAMES, Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip,
                            FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic, NUp, Package, Passport,
-                           Polaroid, Poster, Ring, Scatter, Shapes, Single, Spiral, Strip, Triptych)
+                           Brick, Fan, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Strip,
+                           Timeline, Triptych)
 from .core.render import render_all
 
 PAGES = {"a4": (595, 842), "letter": (612, 792), "a5": (420, 595), "4x6": (288, 432), "5x7": (360, 504),
@@ -67,6 +68,14 @@ def build(args) -> NUp | Single | Poster:
     elif args.layout == "scatter":
         lay = Scatter(page=page, photos=args.scatter_photos, size=args.scatter_size / 100, tilt=args.tilt,
                       border=args.border, seed=args.seed)
+    elif args.layout == "slant":
+        lay = Slant(page=page, panels=max(2, args.panels), slant=args.slant, gutter=args.gutter)
+    elif args.layout == "fan":
+        lay = Fan(page=page, photos=args.fan_photos, spread=args.spread, border=args.fan_border / 100)
+    elif args.layout == "timeline":
+        lay = Timeline(page=page, photos=args.timeline_photos, dates=not args.no_dates, gutter=args.gutter)
+    elif args.layout == "brick":
+        lay = Brick(page=page, columns=max(2, args.cols), rows=args.rows, gutter=args.gutter)
     elif args.layout == "strip":
         lay = Strip(page=page, frames=args.frames or 4, strip_w=(args.strip_w or 51) * MM, strip_h=args.strip_h * MM,
                     direction=args.direction)
@@ -101,7 +110,8 @@ def main(argv=None) -> int:
     ap.add_argument("-o", "--out", required=True, help=".pdf (multipage) or .png (page number appended)")
     ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic", "strip", "passport", "polaroid", "triptych", "package",
                                                        "collage", "framed", "badges", "feature", "filmstrip", "bento", "spiral",
-                                                       "honeycomb", "calendar", "masonry", "shapes", "ring", "scatter"], default="nup")
+                                                       "honeycomb", "calendar", "masonry", "shapes", "ring", "scatter", "slant", "fan", "timeline",
+                                                       "brick"], default="nup")
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--cols", type=int, default=2)
     ap.add_argument("--segments", type=int, default=4)
@@ -144,6 +154,12 @@ def main(argv=None) -> int:
     ap.add_argument("--scatter-size", type=float, default=45, help="scatter: photo size, percent of the page's shorter side")
     ap.add_argument("--tilt", type=float, default=12, help="scatter: largest tilt either way, degrees")
     ap.add_argument("--seed", type=int, default=1, help="scatter: random seed (same seed = same pile)")
+    ap.add_argument("--slant", type=float, default=12, help="slant: lean in degrees, -40 to 40")
+    ap.add_argument("--fan-photos", type=int, default=5, help="fan: cards per page")
+    ap.add_argument("--spread", type=float, default=60, help="fan: angle from the first card to the last, degrees")
+    ap.add_argument("--fan-border", type=float, default=6, help="fan: card border, percent of the card width")
+    ap.add_argument("--timeline-photos", type=int, default=6, help="timeline: photos per page")
+    ap.add_argument("--no-dates", action="store_true", help="timeline: leave the date captions out")
     ap.add_argument("--landscape", action="store_true", help="turn the paper sideways (e.g. 4x6 for 4 x 2 photos)")
     ap.add_argument("--copies", type=int, default=0, help="passport: copies of each photo, 0 = fill the sheet")
     ap.add_argument("--gutter", type=float, default=4, help="gap between photos / panels / prints, points")

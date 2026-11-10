@@ -77,6 +77,10 @@ class Layout:
         ellipse (filled) and frame (outline only)."""
         return []
 
+    def outlines(self, page: int) -> list[list[tuple[float, float]]] | None:
+        """Polygons (in points) the photos are cut to, one per slot in slot order. None = plain rectangles."""
+        return None
+
 
 @dataclass
 class NUp(Layout):
@@ -1370,3 +1374,265 @@ class Scatter(Layout):
 
     def slots(self, page: int):
         return [(item, photo) for item, photo, _, _ in self.pile(page)]
+
+
+@lru_cache(maxsize=2048)
+def _taken(path: str, mtime: int) -> datetime.datetime | None:
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            ex = im.getexif()
+            raw = ex.get_ifd(0x8769).get(36867) or ex.get(306)   # DateTimeOriginal, else DateTime
+        return datetime.datetime.strptime(str(raw)[:19], "%Y:%m:%d %H:%M:%S") if raw else None
+    except Exception:   # unreadable file, no EXIF, odd date text: simply "no date"
+        return None
+
+
+def taken(item: ImageItem) -> datetime.datetime | None:
+    """When the photo was taken, from its EXIF data; None if it has none."""
+    try:
+        return _taken(item.path, os.stat(item.path).st_mtime_ns)
+    except OSError:
+        return None
+
+
+def date_text(item: ImageItem) -> str:
+    """'12 Mar 2024' from the photo's EXIF date, else the file name without its extension."""
+    d = taken(item)
+    return f"{d.day} {MONTHS[d.month - 1][:3]} {d.year}" if d else os.path.splitext(os.path.basename(item.path))[0]
+
+
+def date_sort_key(item: ImageItem) -> datetime.datetime:
+    """For sorting: the EXIF date, else the file's modification time, else the very end."""
+    d = taken(item)
+    if d:
+        return d
+    try:
+        return datetime.datetime.fromtimestamp(os.stat(item.path).st_mtime)
+    except OSError:
+        return datetime.datetime.max
+
+
+@dataclass
+class Slant(Layout):
+    """Diagonal panels: tall parallelograms side by side, each photo cut to its slanted shape.
+
+    A positive slant leans the panels to the right, a negative one to the left. Panels fill the page height and
+    keep the gutter between them. Each page takes `panels` photos in order.
+    """
+    panels: int = 5
+    slant: float = 12.0     # degrees from vertical, -40 to 40
+    gutter: float = 6.0
+
+    def __post_init__(self):
+        if not 2 <= self.panels <= 12 or not -40 <= self.slant <= 40 or self.gutter < 0:
+            raise ValueError("panels must be 2-12, slant -40 to 40 and gutter >= 0")
+
+    @property
+    def per_page(self) -> int:
+        return self.panels
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.panels))
+
+    def _dx(self) -> float:
+        """How far the panels lean across the page: at most 60% of the page width, so the panels never shrink to slivers."""
+        p = self.page
+        return min(p.imageable_h * math.tan(math.radians(abs(self.slant))), 0.6 * p.imageable_w)
+
+    @property
+    def effective_slant(self) -> float:
+        """The lean actually used, in degrees. Less than |slant| when the page is too narrow for it."""
+        return math.copysign(math.degrees(math.atan(self._dx() / self.page.imageable_h)), self.slant)
+
+    @property
+    def slant_limited(self) -> bool:
+        return abs(self.effective_slant) < abs(self.slant) - 1e-6
+
+    def _polys(self) -> list[list[tuple[float, float]]]:
+        p, g, n = self.page, self.gutter, self.panels
+        dx = self._dx()
+        w = max(1.0, (p.imageable_w - dx - (n - 1) * g) / n)
+        top, bottom = (dx, 0.0) if self.slant >= 0 else (0.0, dx)   # how far each end is shifted right
+        out = []
+        for i in range(n):
+            x = p.left + i * (w + g)
+            out.append([(x + top, p.top), (x + top + w, p.top), (x + bottom + w, p.top + p.imageable_h),
+                        (x + bottom, p.top + p.imageable_h)])
+        return out
+
+    def _chunk(self, page: int):
+        return self.images[page * self.panels:(page + 1) * self.panels]
+
+    def outlines(self, page: int):
+        return self._polys()[:len(self._chunk(page))]
+
+    def slots(self, page: int):
+        out = []
+        for item, poly in zip(self._chunk(page), self._polys()):
+            xs, ys = [x for x, _ in poly], [y for _, y in poly]
+            out.append((item, Rect(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))))
+        return out
+
+
+@dataclass
+class Fan(Layout):
+    """Cards fanned out like a hand of playing cards, pivoting at the bottom, the last on top.
+
+    Every card has the same shape and its photo is cropped to it. The whole fan is scaled to fill the page.
+    """
+    photos: int = 5
+    spread: float = 60.0    # angle from the first card to the last, in degrees
+    border: float = 0.06    # white border, as a share of the card's width
+
+    def __post_init__(self):
+        if not 1 <= self.photos <= 12 or not 10 <= self.spread <= 120 or not 0.02 <= self.border <= 0.15:
+            raise ValueError("photos 1-12, spread 10-120 degrees, border between 2% and 15%")
+
+    @property
+    def per_page(self) -> int:
+        return self.photos
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.photos))
+
+    def pile(self, page: int) -> list[tuple[ImageItem, Rect, Rect, float]]:
+        """(photo, its rectangle, its card, tilt in degrees counter-clockwise), bottom of the pile first."""
+        chunk = self.images[page * self.photos:(page + 1) * self.photos]
+        n = len(chunk)
+        if not n:
+            return []
+        p = self.page
+        angles = [0.0] if n == 1 else [-self.spread / 2 + i * self.spread / (n - 1) for i in range(n)]   # + = clockwise
+        cw, ch, radius = 0.72, 1.0, 0.45
+        bw = self.border * cw
+        centres, corners = [], []
+        for a in angles:
+            t = math.radians(a)
+            cx, cy = radius * math.sin(t), -radius * math.cos(t)
+            centres.append((cx, cy))
+            for dx, dy in ((-cw / 2, -ch / 2), (cw / 2, -ch / 2), (cw / 2, ch / 2), (-cw / 2, ch / 2)):
+                corners.append((cx + dx * math.cos(t) - dy * math.sin(t), cy + dx * math.sin(t) + dy * math.cos(t)))
+        x0, x1 = min(x for x, _ in corners), max(x for x, _ in corners)
+        y0, y1 = min(y for _, y in corners), max(y for _, y in corners)
+        sc = min(p.imageable_w / (x1 - x0), p.imageable_h / (y1 - y0))
+        ox = p.left + p.imageable_w / 2 - (x0 + x1) / 2 * sc
+        oy = p.top + p.imageable_h / 2 - (y0 + y1) / 2 * sc
+        out = []
+        for item, (cx, cy), a in zip(chunk, centres, angles):
+            card = Rect(ox + cx * sc - cw * sc / 2, oy + cy * sc - ch * sc / 2, cw * sc, ch * sc)
+            photo = Rect(card.x + bw * sc, card.y + bw * sc, (cw - 2 * bw) * sc, (ch - 3 * bw) * sc)
+            out.append((item, photo, card, -a))
+        return out
+
+    def slots(self, page: int):
+        return [(item, photo) for item, photo, _, _ in self.pile(page)]
+
+
+@dataclass
+class Brick(Layout):
+    """Staggered tiles like brickwork: every other row is shifted by half a tile and has one tile fewer."""
+    columns: int = 3
+    rows: int = 4
+    gutter: float = 6.0
+
+    def __post_init__(self):
+        if self.columns < 2 or self.rows < 1 or self.gutter < 0:
+            raise ValueError("columns must be >= 2, rows >= 1 and gutter >= 0")
+
+    def _rects(self) -> list[Rect]:
+        p, g, c, r = self.page, self.gutter, self.columns, self.rows
+        tw, th = (p.imageable_w - g * (c - 1)) / c, (p.imageable_h - g * (r - 1)) / r
+        out = []
+        for row in range(r):
+            shift = (tw + g) / 2 if row % 2 else 0.0
+            for col in range(c - (row % 2)):
+                out.append(Rect(p.left + shift + col * (tw + g), p.top + row * (th + g), tw, th))
+        return out
+
+    @property
+    def per_page(self) -> int:
+        return len(self._rects())
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.per_page))
+
+    def slots(self, page: int):
+        rects = self._rects()
+        return list(zip(self.images[page * len(rects):(page + 1) * len(rects)], rects))
+
+
+@dataclass
+class Timeline(Layout):
+    """A line with photos alternating on either side, each with its date: a family or trip timeline.
+
+    Runs top to bottom on a portrait page and left to right on a landscape page. Dates come from the photos'
+    EXIF data (the file name is shown if a photo has none). Photos appear in list order: use Edit > Sort Photos
+    by Date to put them in time order.
+    """
+    photos: int = 6
+    dates: bool = True
+    gutter: float = 8.0
+    caption_pt: float = 9.0
+
+    def __post_init__(self):
+        if not 1 <= self.photos <= 12 or self.gutter < 0:
+            raise ValueError("photos must be 1-12 and gutter >= 0")
+
+    @property
+    def per_page(self) -> int:
+        return self.photos
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.photos))
+
+    def _cells(self, page: int):
+        """[(item, cell rect, along-the-line position of its dot)] plus helpers, in page coordinates."""
+        p = self.page
+        chunk = self.images[page * self.photos:(page + 1) * self.photos]
+        m = len(chunk)
+        horiz = p.imageable_w > p.imageable_h
+        length, width = (p.imageable_w, p.imageable_h) if horiz else (p.imageable_h, p.imageable_w)
+        g, cross = self.gutter, width / 2 - self.gutter - 6
+        cu = min(length, 1.4 * cross) if m < 2 else min((2 * length - (m - 1) * g) / (m + 1), 1.4 * cross)
+        step = 0.0 if m < 2 else (length - cu) / (m - 1)
+
+        def box(u0, v0, du, dv):
+            return Rect(p.left + u0, p.top + v0, du, dv) if horiz else Rect(p.left + v0, p.top + u0, dv, du)
+
+        out = []
+        for i, item in enumerate(chunk):
+            uc = length / 2 if m < 2 else cu / 2 + i * step
+            v0 = width / 2 - 6 - g - cross if i % 2 == 0 else width / 2 + 6 + g
+            out.append((item, box(uc - cu / 2, v0, cu, cross), uc))
+        return out, box, width, length
+
+    @property
+    def _band(self) -> float:
+        return self.caption_pt * 1.8 if self.dates else 0.0
+
+    def slots(self, page: int):
+        return [(item, Rect(c.x, c.y, c.w, max(1.0, c.h - self._band))) for item, c, _ in self._cells(page)[0]]
+
+    def captions(self, page: int):
+        if not self.dates:
+            return []
+        return [(date_text(item), Rect(c.x, c.y + c.h - self._band, c.w, self._band)) for item, c, _ in self._cells(page)[0]]
+
+    def shapes(self, page: int):
+        cells, box, width, length = self._cells(page)
+        if not cells:
+            return []
+        mid, g = width / 2, self.gutter
+        us = [u for _, _, u in cells]
+        line, dot = (150, 155, 170), (60, 100, 200)
+        out = [("rect", box(min(us) - 14, mid - 1, max(us) - min(us) + 28, 2), line)]
+        for i, (_, _, u) in enumerate(cells):
+            v0 = mid - 6 - g if i % 2 == 0 else mid
+            out.append(("rect", box(u - 0.5, v0, 1, g + 6), line))                   # the tick from the line to its photo
+        out += [("ellipse", box(u - 5, mid - 5, 10, 10), dot) for u in us]
+        return out

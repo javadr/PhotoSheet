@@ -504,3 +504,103 @@ def test_ring_masonry_cli_and_presets(red, tmp_path):
         preset.save(lay, f)
         back = preset.load(f)
         assert type(back) is type(lay) and back == lay
+
+
+def test_slant_cuts_each_photo_to_its_parallelogram(tmp_path):
+    from photosheet.core.layouts import Slant
+    reds = []
+    for i, c in enumerate(((255, 0, 0), (0, 160, 0), (0, 0, 255))):
+        p = tmp_path / f"c{i}.png"
+        Image.new("RGB", (300, 600), c).save(p)
+        reds.append(str(p))
+    pg = PageExtent(300, 400)
+    s = Slant(page=pg, panels=3, slant=20, gutter=10)
+    for p in reds:
+        s.add(ImageItem(p))
+    im = render_page(s, 0, dpi=72)
+    for k, ((x0, y0), (x1, _), (x2, y2), (x3, _)) in enumerate(s.outlines(0)):
+        mid_x = ((x0 + x3) / 2 + (x1 + x2) / 2) / 2                                    # the middle of the panel at half height
+        assert im.getpixel((int(mid_x), 200)) == [(255, 0, 0), (0, 160, 0), (0, 0, 255)][k]
+        assert im.getpixel((int(x0 + 4), int(y0 + 4))) == [(255, 0, 0), (0, 160, 0), (0, 0, 255)][k]   # top-left corner is filled
+    b0 = s.slots(0)[0][1]                                                                # the first panel has no neighbour to its left
+    assert im.getpixel((int(b0.x + 2), int(b0.y + 3))) == (255, 255, 255)               # top-left of its box is cut away (leans right)
+    assert im.getpixel((int(b0.x + b0.w - 3), int(b0.y + b0.h - 3))) in ((255, 255, 255), (0, 160, 0))   # bottom-right: paper or the next panel
+    p0, p1 = s.outlines(0)[:2]
+    right0 = (p0[1][0] + p0[2][0]) / 2                                                   # panel 0's right edge at half height
+    left1 = (p1[0][0] + p1[3][0]) / 2                                                    # panel 1's left edge at half height
+    assert abs((left1 - right0) - 10) < 1e-6 and im.getpixel((int((right0 + left1) / 2), 200)) == (255, 255, 255)   # the gutter is paper
+
+
+def test_fan_renders_tilted_cards_with_shadows_and_the_last_card_on_top(tmp_path):
+    from photosheet.core.layouts import Fan
+    cols = ((255, 0, 0), (0, 160, 0), (0, 0, 255))
+    files = []
+    for i, c in enumerate(cols):
+        p = tmp_path / f"f{i}.png"
+        Image.new("RGB", (300, 400), c).save(p)
+        files.append(str(p))
+    pg = PageExtent(500, 400)
+    pg.set_margins(10, 10, 10, 10)
+    f = Fan(page=pg, photos=3, spread=50, border=0.08)
+    for p in files:
+        f.add(ImageItem(p))
+    im = render_page(f, 0, dpi=72)
+    pile = f.pile(0)
+    seen = {c: sum(1 for x in range(0, 500, 2) for y in range(0, 400, 2) if im.getpixel((x, y)) == c) for c in cols}
+    assert all(n > 150 for n in seen.values()), seen                                     # every card shows its photo, even the covered ones
+    top = pile[-1]
+    assert im.getpixel((int(top[2].x + top[2].w / 2), int(top[2].y + top[2].h / 2))) == cols[-1]   # last card lies on top
+    assert im.getpixel((2, 2)) == (255, 255, 255) and im.getpixel((497, 397)) == (255, 255, 255)
+    assert render_page(f, 0, dpi=72).tobytes() == im.tobytes()                          # deterministic
+
+
+def test_brick_and_timeline_render(tmp_path, red):
+    from photosheet.core.layouts import Brick, Timeline
+    b = Brick(page=PageExtent(300, 300), columns=3, rows=3, gutter=10)
+    for _ in range(8):
+        b.add(ImageItem(red, crop=True, rotation=0))
+    im = render_page(b, 0, dpi=72)
+    for _, r in b.slots(0):
+        assert im.getpixel((int(r.x + r.w / 2), int(r.y + r.h / 2))) == (255, 0, 0)
+    r0, r1 = b.slots(0)[0][1], b.slots(0)[3][1]
+    assert im.getpixel((int(r0.x + 2), int(r1.y + r1.h / 2))) == (255, 255, 255)          # the half-tile gap at the start of an odd row
+    jp = []
+    for i in range(3):
+        p = tmp_path / f"t{i}.jpg"
+        ex = Image.Exif()
+        ex[306] = f"2024:0{i + 1}:15 10:00:00"
+        Image.new("RGB", (240, 160), (255, 0, 0)).save(p, exif=ex)
+        jp.append(str(p))
+    pg = PageExtent(500, 700)
+    pg.set_margins(20, 20, 20, 20)
+    t = Timeline(page=pg, photos=3, gutter=12, caption_pt=12)
+    for p in jp:
+        t.add(ImageItem(p, rotation=0))
+    out = render_page(t, 0, dpi=100)
+    k = 100 / 72
+    for (_, r), (text, band) in zip(t.slots(0), t.captions(0)):
+        assert min(out.getpixel((int((r.x + r.w / 2) * k), int((r.y + r.h / 2) * k)))[:1]) >= 245     # the (red) photo; JPEG is not exact
+        ink = out.crop((int(band.x * k), int(band.y * k), int((band.x + band.w) * k), int((band.y + band.h) * k))).getextrema()
+        assert ink[0][0] < 140 and ink[1][0] < 140                                       # dark date text in the caption band
+    dots = [r for kind, r, _ in t.shapes(0) if kind == "ellipse"]
+    d = dots[0]
+    px = out.getpixel((int((d.x + d.w / 2) * k), int((d.y + d.h / 2) * k)))
+    assert px[2] > 150 and px[0] < 120                                                    # a blue dot on the line
+    render_page(t, 0, dpi=30)                                                             # hairlines at low resolution must not crash
+
+
+def test_cli_and_presets_for_slant_fan_brick_timeline(red, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import Brick, Fan, Slant, Timeline
+    for args in (["--layout", "slant", "--panels", "4", "--slant", "-15"], ["--layout", "slant"],
+                 ["--layout", "fan", "--fan-photos", "3", "--spread", "80", "--fan-border", "9"],
+                 ["--layout", "brick", "--cols", "4", "--rows", "3"], ["--layout", "brick", "--cols", "1"],
+                 ["--layout", "timeline", "--timeline-photos", "3"], ["--layout", "timeline", "--no-dates", "--landscape"]):
+        out = tmp_path / "o.pdf"
+        assert cli.main([red, red, red, "-o", str(out), "--dpi", "35", *args]) == 0 and out.stat().st_size > 0
+    for lay in (Slant(page=PageExtent(300, 400), panels=7, slant=-22, gutter=3), Fan(page=PageExtent(400, 300), photos=8, spread=90, border=0.1),
+                Brick(page=PageExtent(300, 300), columns=5, rows=2, gutter=1), Timeline(page=PageExtent(300, 400), photos=9, dates=False, gutter=2)):
+        f = str(tmp_path / "p.json")
+        preset.save(lay, f)
+        back = preset.load(f)
+        assert type(back) is type(lay) and back == lay

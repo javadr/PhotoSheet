@@ -36,6 +36,10 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 | **Shapes** | A grid of photos cropped to a heart, star, diamond, triangle, rounded square or circle. |
 | **Ring** | A wreath of round photos around a circle, with a bigger photo in the middle (6 or more around the ring). |
 | **Scatter** | A casual pile of tilted prints on white cards with soft shadows; the seed makes the same pile every time. |
+| **Slant** | Diagonal parallelogram panels side by side, each photo cut to its slanted shape; lean left or right. |
+| **Fan** | Cards fanned out like a hand of playing cards, the last on top. Suits landscape paper best. |
+| **Brick** | Staggered tiles like brickwork: every other row is shifted half a tile. |
+| **Timeline** | Photos alternate either side of a line, each with its date from the photo's own data. Use Edit ▸ Sort Photos by Date to put them in order. |
 
 **Working with the page**
 
@@ -44,6 +48,7 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
   repositions the photo inside its frame instead (hold `Shift` to swap). Works on Carousel wedges too.
 - In a **Collage**, drag a photo to move it and drag a corner to resize it. It snaps to the page edges, the centre
   and other photos (hold `Ctrl` to turn snapping off, `Shift` for a free shape).
+- Angles and percentages are sliders with an exact number beside them; the preview updates as you drag.
 - Undo and redo for adding, removing, reordering, moving and effect changes.
 - Drop image files onto the window to add them.
 - Paper sizes A4, Letter, A5, 4 × 6 in and 5 × 7 in, in portrait or landscape.
@@ -93,6 +98,13 @@ photosheet-cli me.jpg -o package.pdf --layout package --page 8x10 --recipe 5x7-4
 
 # A 12-month wall calendar for 2027, one photo per month
 photosheet-cli photos/*.jpg -o calendar.pdf --layout calendar --year 2027 --crop
+
+# A timeline of a trip, dates taken from the photos (sort them first in the app, or name them in order)
+photosheet-cli photos/*.jpg -o timeline.pdf --layout timeline --timeline-photos 6
+
+# Slanted panels, a fan of cards on landscape paper
+photosheet-cli photos/*.jpg -o slant.pdf --layout slant --panels 5 --slant 14
+photosheet-cli photos/*.jpg -o fan.pdf --layout fan --fan-photos 5 --spread 70 --landscape
 
 # Heart-shaped photos, 3 rows by 2 columns
 photosheet-cli photos/*.jpg -o hearts.pdf --layout shapes --shape heart --rows 3 --cols 2 --crop

@@ -1072,3 +1072,172 @@ def test_page_drag_swaps_masonry_shapes_ring_and_scatter_photos(app, tmp_path):
         _mouse(app, w, "move", c)
         _mouse(app, w, "release", c)
         assert names() == ["2.png", "1.png", "0.png"], kind
+
+
+# ---- Slant, Fan, Brick, Timeline, the grouped layout menu, slider controls, Sort by Date ----
+
+def test_layout_menu_is_grouped_headings_cannot_be_picked_and_every_layout_is_listed(app):
+    from photosheet.ui.main_window import KIND_GROUPS, KINDS
+    w = MainWindow()
+    model = w.kind.model()
+    rows = [(model.item(i).text(), bool(model.item(i).flags() & Qt.ItemFlag.ItemIsEnabled)) for i in range(model.rowCount())]
+    headings = [t for t, ok in rows if not ok]
+    assert headings == [g for g, _ in KIND_GROUPS]                                     # five headings, none selectable
+    assert sorted(t for t, ok in rows if ok) == sorted(KINDS) and len(KINDS) == 28   # every layout is under exactly one heading
+    assert w.kind.currentText() == "N-up" and bool(model.item(w.kind.currentIndex()).flags() & Qt.ItemFlag.ItemIsEnabled)
+    # the order on screen is heading, its layouts, next heading...
+    expect = [x for g, names in KIND_GROUPS for x in (g, *names)]
+    assert [t for t, _ in rows] == expect
+    assert w.kind.maxVisibleItems() >= len(rows)                                       # the whole menu fits without scrolling
+
+
+def test_slider_and_number_box_stay_in_step_and_announce_their_names(app):
+    from photosheet.ui.main_window import SliderSpin
+    s = SliderSpin(-40, 40, 12, "°")
+    seen = []
+    s.valueChanged.connect(seen.append)
+    assert (s.value(), s.slider.value(), s.spin.value()) == (12, 12, 12) and s.spin.suffix() == "°"
+    s.slider.setValue(30)                                    # dragging the slider moves the number
+    assert (s.value(), s.spin.value()) == (30, 30) and seen == [30]
+    s.spin.setValue(-15)                                     # typing a number moves the slider
+    assert s.slider.value() == -15 and seen == [30, -15]
+    s.setValue(-15)                                          # no change: no signal
+    assert seen == [30, -15]
+    s.setValue(99)                                           # clamped to the range
+    assert s.value() == 40 and s.slider.minimum() == -40 and s.slider.orientation() == Qt.Orientation.Horizontal
+    w = MainWindow()
+    for ctl, label in ((w.slant, "Lean"), (w.fan_spread, "Spread"), (w.sc_tilt, "Tilt (°)"), (w.hero_share, "Hero size (%)")):
+        assert isinstance(ctl, SliderSpin) and ctl.spin.accessibleName() == label and ctl.slider.accessibleName() == f"{label} slider"
+
+
+def test_slant_fan_brick_timeline_keep_photos_show_controls_and_roundtrip_presets(app, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import Brick, Fan, Slant, Timeline
+    w = _win_with_images(tmp_path, 7)
+    w.show()
+    w.kind.setCurrentText("Slant")
+    assert isinstance(w.layout_, Slant) and len(w.layout_.images) == 7
+    assert w.slant_panels.isVisible() and w.slant.isVisible() and w.gutter.isVisible() and not w.fan_n.isVisible()
+    w.slant_panels.setValue(3)
+    w.slant.setValue(-18)
+    assert (w.layout_.panels, w.layout_.slant) == (3, -18) and w.layout_.pages == 3
+    w.slant.setValue(40)                                                                # portrait page: the lean is limited
+    assert w.layout_.slant_limited and w.per_sheet.isVisible() and w.per_sheet.text().startswith("limited to ")
+    w.slant.setValue(10)
+    assert w.per_sheet.text() == "" and not w.per_sheet.isVisible()                    # nothing to say: no stray "Per sheet" label
+    w.kind.setCurrentText("Fixed size")
+    assert w.per_sheet.isVisible() and "photos" in w.per_sheet.text()                  # layouts that always have a readout still show it
+    w.kind.setCurrentText("Slant")
+    w.kind.setCurrentText("Fan")
+    assert isinstance(w.layout_, Fan) and w.fan_n.isVisible() and w.fan_spread.isVisible() and w.fan_border.isVisible()
+    w.fan_n.setValue(4)
+    w.fan_spread.setValue(90)
+    w.fan_border.setValue(10)
+    assert (w.layout_.photos, w.layout_.spread, w.layout_.border) == (4, 90, 0.1) and w.layout_.pages == 2
+    w.kind.setCurrentText("Brick")
+    assert isinstance(w.layout_, Brick) and w.rows.isVisible() and w.cols.isVisible() and not w.slant.isVisible()
+    w.cols.setValue(4)
+    w.rows.setValue(3)
+    assert (w.layout_.columns, w.layout_.rows) == (4, 3)
+    w.cols.setValue(1)                                                                  # a brick row needs two tiles: never crashes
+    assert w.layout_.columns == 2
+    w.kind.setCurrentText("Timeline")
+    assert isinstance(w.layout_, Timeline) and w.tl_n.isVisible() and w.tl_dates.isVisible() and not w.fan_n.isVisible()
+    w.tl_n.setValue(3)
+    w.tl_dates.setChecked(False)
+    assert (w.layout_.photos, w.layout_.dates) == (3, False) and w.layout_.pages == 3
+    for setup, check in (
+        (lambda: (w.kind.setCurrentText("Slant"), w.slant_panels.setValue(6), w.slant.setValue(-9)),
+         lambda: (w.kind.currentText(), w.slant_panels.value(), w.slant.value()) == ("Slant", 6, -9)),
+        (lambda: (w.kind.setCurrentText("Fan"), w.fan_n.setValue(7), w.fan_spread.setValue(45), w.fan_border.setValue(4)),
+         lambda: (w.kind.currentText(), w.fan_n.value(), w.fan_spread.value(), w.fan_border.value()) == ("Fan", 7, 45, 4)),
+        (lambda: (w.kind.setCurrentText("Brick"), w.cols.setValue(5), w.rows.setValue(2)),
+         lambda: (w.kind.currentText(), w.cols.value(), w.rows.value()) == ("Brick", 5, 2)),
+        (lambda: (w.kind.setCurrentText("Timeline"), w.tl_n.setValue(8), w.tl_dates.setChecked(True)),
+         lambda: (w.kind.currentText(), w.tl_n.value(), w.tl_dates.isChecked()) == ("Timeline", 8, True)),
+    ):
+        setup()
+        f = str(tmp_path / "p.json")
+        preset.save(w.layout_, f)
+        w.kind.setCurrentText("N-up")
+        w.layout_ = preset.load(f)
+        w._sync_controls()
+        assert check()
+
+
+def test_sort_photos_by_date_orders_by_taken_date_is_undoable_and_a_noop_when_sorted(app, tmp_path):
+    from PIL import Image
+    w = MainWindow()
+    names = {"late": "2024:09:01 10:00:00", "early": "2023:01:05 10:00:00", "mid": "2023:11:20 10:00:00"}
+    for n, when in names.items():
+        ex = Image.Exif()
+        ex[306] = when
+        Image.new("RGB", (40, 30)).save(tmp_path / f"{n}.jpg", exif=ex)
+    w._add_files([str(tmp_path / f"{n}.jpg") for n in ("late", "early", "mid")])
+    order = lambda: [i.path.rsplit("/", 1)[-1][:-4] for i in w.layout_.images]
+    assert order() == ["late", "early", "mid"]
+    stack_before = w.undo_stack.count()
+    w._sort_by_date()
+    assert order() == ["early", "mid", "late"] and w.undo_act.text() == "Undo Sort by Date"
+    assert [w.list.item(i).text() for i in range(3)] == ["early.jpg", "mid.jpg", "late.jpg"]   # the list follows
+    w.undo_stack.undo()
+    assert order() == ["late", "early", "mid"]
+    w.undo_stack.redo()
+    n = w.undo_stack.count()
+    w._sort_by_date()                                                                          # already in order
+    assert w.undo_stack.count() == n and order() == ["early", "mid", "late"]
+    assert any(a.text() == "Sort Photos by Date" for a in w.menuBar().actions()[1].menu().actions())   # reachable from the Edit menu
+
+
+def test_slant_clicks_follow_the_slanted_shape_not_the_bounding_box(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = _ready_window(app, tmp_path, 3)
+    w.kind.setCurrentText("Slant")
+    w.slant_panels.setValue(3)
+    w.slant.setValue(20)
+    cut = w._cut_polygons()
+    assert sorted(cut) == [0, 1, 2]
+    centre = lambda poly: QPointF(sum(poly[i].x() for i in range(4)) / 4, sum(poly[i].y() for i in range(4)) / 4)
+    for i in range(3):
+        assert w._slot_at(centre(cut[i]))[0] == i                                              # the middle of a panel picks that panel
+    r0 = w._slot_rect(dict(w._slots_now())[0])
+    corner = QPointF(r0.left() + 3, r0.top() + 3)                                              # inside panel 0's box, outside its shape
+    assert not cut[0].containsPoint(corner, Qt.FillRule.OddEvenFill) and r0.contains(corner)
+    assert w._slot_at(corner) is None
+    names = lambda: [i.path[-5:] for i in w.layout_.images]
+    a, c = centre(cut[0]), centre(cut[2])
+    shift = Qt.KeyboardModifier.ShiftModifier                                                  # plain drag repositions; Shift swaps
+    _mouse(app, w, "press", a, shift)
+    _mouse(app, w, "move", (a + c) / 2, shift)
+    assert [type(s).__name__ for s, _ in w.preview.overlay][:1] == ["QPolygonF"]                # feedback is the slanted shape too
+    _mouse(app, w, "move", c, shift)
+    _mouse(app, w, "release", c, shift)
+    assert names() == ["2.png", "1.png", "0.png"]
+    item = w.layout_.images[1]
+    before = (item.hpan, item.vpan)
+    mid = centre(cut[1])
+    _mouse(app, w, "press", mid)
+    _mouse(app, w, "move", mid + QPointF(5, 8))
+    _mouse(app, w, "move", mid + QPointF(12, 30))
+    assert w._pan is not None and (item.hpan, item.vpan) != before                              # a plain drag moves the photo in its panel
+    _mouse(app, w, "release", mid + QPointF(12, 30))
+    assert w.undo_act.text() == "Undo Reposition Photo"
+
+
+def test_page_drag_swaps_fan_brick_and_timeline_photos(app, tmp_path):
+    w = _ready_window(app, tmp_path)
+    names = lambda: [i.path[-5:] for i in w.layout_.images]
+    for kind in ("Brick", "Timeline", "Fan"):
+        w.layout_.images[:] = sorted(w.layout_.images, key=lambda i: i.path)
+        w.kind.setCurrentText(kind)
+        slots = dict(w._slots_now())
+        a, c = w._slot_rect(slots[0]).center(), w._slot_rect(slots[2]).center()
+        if kind == "Fan":                                      # cards overlap: grab each one where it is not covered
+            from PySide6.QtCore import QPointF
+            ra, rc = w._slot_rect(slots[0]), w._slot_rect(slots[2])
+            a, c = QPointF(ra.left() + 3, ra.center().y()), QPointF(rc.right() - 3, rc.center().y())
+        _mouse(app, w, "press", a)
+        _mouse(app, w, "move", (a + c) / 2)
+        _mouse(app, w, "move", c)
+        _mouse(app, w, "release", c)
+        assert names() == ["2.png", "1.png", "0.png"], kind

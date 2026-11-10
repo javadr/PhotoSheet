@@ -14,7 +14,7 @@ from PIL import Image, ImageCms, ImageChops, ImageDraw, ImageFilter, ImageFont, 
 
 from .effects import apply_effects
 from .geometry import Rect, Rotation, fit
-from .layouts import Carousel, ImageItem, Layout, Poster, Scatter, Triptych
+from .layouts import Carousel, ImageItem, Layout, Poster, Triptych
 
 _SRGB = None
 
@@ -125,6 +125,17 @@ def _mask(shape: str, w: int, h: int) -> Image.Image:
     return m.resize((w, h), Image.LANCZOS)
 
 
+def _place_cut(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, poly: list, s: float, fast: bool,
+               background) -> None:
+    """A photo filling `slot`, cut to the polygon `poly` (page points) and pasted onto the canvas."""
+    w, h = max(1, round(slot.w * s)), max(1, round(slot.h * s))
+    tmp = Image.new("RGB", (w, h), background)
+    _place(tmp, replace(item, crop=True, rotation=0, mask=None), im, Rect(0, 0, slot.w, slot.h), s, fast)
+    m = Image.new("L", (w * 4, h * 4), 0)
+    ImageDraw.Draw(m).polygon([((x - slot.x) * s * 4, (y - slot.y) * s * 4) for x, y in poly], fill=255)
+    canvas.paste(tmp, (round(slot.x * s), round(slot.y * s)), m.resize((w, h), Image.LANCZOS))
+
+
 def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s: float,
            fast: bool = False, shape: str | None = None) -> None:
     f = fit(im.width, im.height, slot.scaled(s), item.crop, Rotation(item.rotation), item.hpan, item.vpan)
@@ -172,7 +183,8 @@ def _caption(draw: ImageDraw.ImageDraw, text: str, band: Rect, s: float, color=(
 
 
 def _draw_shape(draw: ImageDraw.ImageDraw, kind: str, r: Rect, rgb: tuple, s: float) -> None:
-    box = (r.x * s, r.y * s, (r.x + r.w) * s - 1, (r.y + r.h) * s - 1)
+    x0, y0 = r.x * s, r.y * s
+    box = (x0, y0, max(x0, (r.x + r.w) * s - 1), max(y0, (r.y + r.h) * s - 1))   # hairlines stay at least one pixel
     if kind == "card":
         draw.rectangle(box, fill=rgb, outline=(205, 205, 205), width=max(1, round(0.5 * s)))
     elif kind == "rect":
@@ -213,7 +225,7 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
                    round((r.x - group.x + r.w) * s), round((r.y - group.y + r.h) * s))
             canvas.paste(pic.crop(box), (round(r.x * s), round(r.y * s)))
         return canvas
-    if isinstance(layout, Scatter):
+    if hasattr(layout, "pile"):   # Scatter and Fan: tilted cards with a shadow
         for item, photo, card, angle in layout.pile(page):
             w, h = max(1, round(card.w * s)), max(1, round(card.h * s))
             c = Image.new("RGB", (w, h), (255, 255, 255))
@@ -253,7 +265,11 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
     for card in layout.cards(page):   # white cards sit under the photos
         draw.rectangle((card.x * s, card.y * s, (card.x + card.w) * s - 1, (card.y + card.h) * s - 1),
                        fill=(255, 255, 255), outline=(205, 205, 205), width=max(1, round(0.5 * s)))
-    for item, slot in layout.slots(page):
+    polys = layout.outlines(page)
+    for k, (item, slot) in enumerate(layout.slots(page)):
+        if polys is not None and k < len(polys):
+            _place_cut(canvas, item, load(item, printer_profile, fast), slot, polys[k], s, fast, background)
+            continue
         if round_photos:
             item = replace(item, crop=True)   # a circle is always filled
         _place(canvas, item, load(item, printer_profile, fast), slot, s, fast, shape=layout.shape if round_photos else None)

@@ -7,20 +7,20 @@ import random
 
 from PIL import Image
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
+from PySide6.QtGui import QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox,
-    QToolButton, QVBoxLayout, QWidget,
+    QSlider, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..core import preset
 from ..core.geometry import PageExtent, Rect, crop_overflow
-from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Calendar, Carousel, Collage,
-                            Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic, NUp,
-                            Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Spiral, Strip,
-                            Triptych, aspect, snap_delta)
+from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Brick, Calendar, Carousel, Collage,
+                            Fan, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic,
+                            NUp, Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral,
+                            Strip, Timeline, Triptych, aspect, date_sort_key, snap_delta)
 from ..core.render import render_page
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
@@ -30,13 +30,24 @@ KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
          "Triptych": Triptych, "Package": Package, "Collage": Collage, "Framed print": FramedPrint,
          "Badges": Badges, "Feature": Feature, "Film strip": Filmstrip, "Bento": Bento,
          "Golden spiral": Spiral, "Honeycomb": Honeycomb, "Calendar": Calendar, "Masonry": Masonry,
-         "Shapes": Shapes, "Ring": Ring, "Scatter": Scatter}
+         "Shapes": Shapes, "Ring": Ring, "Scatter": Scatter, "Slant": Slant, "Fan": Fan, "Brick": Brick,
+         "Timeline": Timeline}
 KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "carousel",
         "Fixed size": "fixed", "Passport": "passport", "Mosaic": "mosaic", "Photo strip": "strip", "Polaroid": "polaroid",
         "Triptych": "triptych", "Package": "package", "Collage": "collage", "Framed print": "framed",
         "Badges": "badges", "Feature": "feature", "Film strip": "filmstrip", "Bento": "bento",
         "Golden spiral": "spiral", "Honeycomb": "honeycomb", "Calendar": "calendar", "Masonry": "masonry",
-        "Shapes": "shapes", "Ring": "ring", "Scatter": "scatter"}
+        "Shapes": "shapes", "Ring": "ring", "Scatter": "scatter", "Slant": "slant", "Fan": "fan", "Brick": "brick",
+        "Timeline": "timeline"}
+# The layout menu is long, so it is grouped (HIG: group related items, use progressive disclosure).
+KIND_GROUPS = (
+    ("Grids", ("N-up", "Single", "Mosaic", "Masonry", "Brick", "Bento", "Feature")),
+    ("Print sizes", ("Fixed size", "Passport", "Package", "Badges", "Photo strip", "Film strip")),
+    ("Frames", ("Polaroid", "Framed print", "Triptych", "Poster")),
+    ("Shapes", ("Shapes", "Honeycomb", "Ring", "Carousel", "Golden spiral")),
+    ("Creative", ("Collage", "Scatter", "Fan", "Slant", "Timeline", "Calendar")),
+)
+assert sorted(k for _, ks in KIND_GROUPS for k in ks) == sorted(KINDS)
 SHAPE_LABELS = {"Heart": "heart", "Star": "star", "Diamond": "diamond", "Triangle": "triangle",
                 "Rounded square": "rounded", "Circle": "circle"}
 assert set(SHAPE_LABELS.values()) == set(SHAPE_NAMES)
@@ -157,6 +168,48 @@ class _Job(QRunnable):
             self.sig.done.emit(self.gen, res)
         except RuntimeError:
             pass  # window closed while rendering
+
+
+class SliderSpin(QWidget):
+    """A slider with the exact value beside it in a number box (HIG: sliders: supplement with a text field and
+    stepper). The minimum is on the leading side, the preview updates while dragging, and typing a value works too."""
+    valueChanged = Signal(int)
+
+    def __init__(self, lo: int, hi: int, value: int, suffix: str = ""):
+        super().__init__()
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(lo, hi)
+        self.slider.setMinimumWidth(70)
+        self.spin = QSpinBox(minimum=lo, maximum=hi, suffix=suffix)
+        self.spin.setValue(value)
+        self.slider.setValue(value)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.slider, 1)
+        row.addWidget(self.spin)
+        self.slider.valueChanged.connect(self.spin.setValue)
+        self.spin.valueChanged.connect(self._from_spin)
+
+    def _from_spin(self, v: int) -> None:
+        if self.slider.value() != v:
+            self.slider.setValue(v)
+        self.valueChanged.emit(v)
+
+    def value(self) -> int:
+        return self.spin.value()
+
+    def setValue(self, v: int) -> None:
+        self.spin.setValue(v)
+
+    def setToolTip(self, text: str) -> None:
+        super().setToolTip(text)
+        self.slider.setToolTip(text)
+        self.spin.setToolTip(text)
+
+    def set_label(self, label: str) -> None:
+        """What a screen reader announces for the two controls."""
+        self.slider.setAccessibleName(f"{label} slider")
+        self.spin.setAccessibleName(label)
 
 
 class _PageLabel(QLabel):
@@ -296,6 +349,7 @@ class MainWindow(QMainWindow):
         self.remove_act.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         self.list.addAction(self.remove_act)
         act(e, "Center Photo in Frame", self._center_photo)
+        act(e, "Sort Photos by Date", self._sort_by_date)
         e.addSeparator()
         self.front_act = act(e, "Bring to Front", lambda: self._z_order(True), "Ctrl+Shift+]")
         self.back_act = act(e, "Send to Back", lambda: self._z_order(False), "Ctrl+Shift+[")
@@ -316,7 +370,19 @@ class MainWindow(QMainWindow):
 
     def _build_layout_dock(self):
         self.kind = QComboBox()
-        self.kind.addItems(KINDS)
+        model = QStandardItemModel(self.kind)
+        for group, names in KIND_GROUPS:                      # headings cannot be picked; the layouts under them can
+            head = QStandardItem(group)
+            head.setFlags(Qt.ItemFlag.NoItemFlags)
+            font = head.font()
+            font.setBold(True)
+            head.setFont(font)
+            model.appendRow(head)
+            for name in names:
+                model.appendRow(QStandardItem(name))
+        self.kind.setModel(model)
+        self.kind.setCurrentText("N-up")
+        self.kind.setMaxVisibleItems(40)                      # the whole list fits: no scrolling inside a menu
         self.page_size = QComboBox()
         self.page_size.addItems(PAGES)
         self.orient = QComboBox()
@@ -329,7 +395,7 @@ class MainWindow(QMainWindow):
         self.margin = self._spin(0, 200, 18)
         self.rows, self.cols = self._spin(1, 20, 2), self._spin(1, 20, 2)
         self.gutter = self._spin(0, 100, 8)
-        self.segments, self.overlap = self._spin(1, 64, 4), self._spin(0, 180, 30)
+        self.segments, self.overlap = self._spin(1, 64, 4), SliderSpin(0, 180, 30, "°")
         self.angle, self.inner = self._spin(-360, 360, 0), self._spin(0, 400, 0)
         self.poster_w, self.poster_h = self._spin(1, 400, 16), self._spin(1, 400, 12)
         self.size_preset = QComboBox()
@@ -362,14 +428,14 @@ class MainWindow(QMainWindow):
         self.staggered.setChecked(True)
         self.thumbs = self._spin(1, 12, 4)
         self.side = QCheckBox("Small photos on the side")
-        self.hero_share = self._spin(20, 90, 70)
+        self.hero_share = SliderSpin(20, 90, 70, " %")
         self.direction = QComboBox()
         self.direction.addItems(DIRECTIONS)
         self.direction.setToolTip("Automatic: strips run sideways on a landscape page and top to bottom on a portrait page.")
         self.bento = QComboBox()
         self.bento.addItems([label for label, _, _, _ in BENTO.values()])
         self.spiral_n = self._spin(2, 12, 5)
-        self.spiral_share = self._spin(30, 80, 62)
+        self.spiral_share = SliderSpin(30, 80, 62, " %")
         self.spiral_cw = QCheckBox("Clockwise")
         self.spiral_cw.setChecked(True)
         self.hex_size = self._dspin(10, 150, 40)
@@ -379,19 +445,29 @@ class MainWindow(QMainWindow):
         self.cal_months = self._spin(1, 24, 12)
         self.cal_week = QComboBox()
         self.cal_week.addItems(["Monday", "Sunday"])
-        self.cal_share = self._spin(20, 80, 55)
+        self.cal_share = SliderSpin(20, 80, 55, " %")
         self.shape_kind = QComboBox()
         self.shape_kind.addItems(SHAPE_LABELS)
         self.ring_n = self._spin(3, 36, 8)
         self.ring_center = QCheckBox("Photo in the centre")
         self.ring_center.setChecked(True)
         self.sc_n = self._spin(1, 30, 6)
-        self.sc_size = self._spin(15, 90, 45)
-        self.sc_tilt = self._spin(0, 45, 12)
+        self.sc_size = SliderSpin(15, 90, 45, " %")
+        self.sc_tilt = SliderSpin(0, 45, 12, "°")
         self.sc_border = self._spin(0, 40, 8)
         self.sc_seed = self._spin(0, 9999, 1)
         self.sc_seed.setToolTip("The same number always gives the same pile.")
         self.shuffle_btn = QPushButton("Shuffle")
+        self.slant_panels = self._spin(2, 12, 5)
+        self.slant = SliderSpin(-40, 40, 12, "°")
+        self.slant.setToolTip("How far the panels lean. Negative leans left. A narrow page limits the lean.")
+        self.fan_n = self._spin(1, 12, 5)
+        self.fan_spread = SliderSpin(10, 120, 60, "°")
+        self.fan_border = SliderSpin(2, 15, 6, " %")
+        self.tl_n = self._spin(1, 12, 6)
+        self.tl_dates = QCheckBox("Show dates")
+        self.tl_dates.setChecked(True)
+        self.tl_dates.setToolTip("Dates come from each photo's own data; the file name is shown for photos without one.")
         self.shuffle_btn.clicked.connect(self._shuffle)
         self.collage_hint = QLabel("Drag a photo to move it, drag a corner\nto resize (Shift = free shape).")
         self.strip_w, self.strip_h = self._dspin(20, 400, 51), self._dspin(40, 600, 152)
@@ -402,8 +478,8 @@ class MainWindow(QMainWindow):
         self.rowsof = {}
         for key, label, w in [
             ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Orientation", self.orient), ("all", "Margin (pt)", self.margin),
-            ("nup,polaroid,shapes", "Rows", self.rows), ("nup,polaroid,shapes,masonry", "Columns", self.cols),
-            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,feature,bento,spiral,honeycomb,calendar,masonry,shapes,ring", "Gutter (pt)", self.gutter),
+            ("nup,polaroid,shapes,brick", "Rows", self.rows), ("nup,polaroid,shapes,masonry,brick", "Columns", self.cols),
+            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,feature,bento,spiral,honeycomb,calendar,masonry,shapes,ring,brick,slant,timeline", "Gutter (pt)", self.gutter),
             ("nup,polaroid,framed", "Captions", self.caption),
             ("nup,fixed,passport,polaroid,package,badges,honeycomb,ring", "", self.marks),
             ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap),
@@ -411,7 +487,7 @@ class MainWindow(QMainWindow):
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
             ("fixed,passport", "Print size", self.size_preset), ("fixed,passport", "Width (mm)", self.cell_w),
             ("fixed,passport", "Height (mm)", self.cell_h), ("passport", "Copies per photo", self.copies),
-            ("fixed,passport,package,badges,honeycomb,shapes,ring", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
+            ("fixed,passport,package,badges,honeycomb,shapes,ring,slant", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
             ("strip,filmstrip", "Frames per strip", self.frames), ("strip,filmstrip", "Strip width (mm)", self.strip_w),
             ("strip,filmstrip", "Direction", self.direction),
             ("strip", "Strip length (mm)", self.strip_h),
@@ -430,9 +506,14 @@ class MainWindow(QMainWindow):
             ("scatter", "Photos per page", self.sc_n), ("scatter", "Photo size (%)", self.sc_size),
             ("scatter", "Tilt (°)", self.sc_tilt), ("scatter", "Border (pt)", self.sc_border),
             ("scatter", "Random seed", self.sc_seed), ("scatter", "", self.shuffle_btn),
+            ("slant", "Panels", self.slant_panels), ("slant", "Lean", self.slant),
+            ("fan", "Cards per page", self.fan_n), ("fan", "Spread", self.fan_spread), ("fan", "Border", self.fan_border),
+            ("timeline", "Photos per page", self.tl_n), ("timeline", "", self.tl_dates),
             ("all", "", self.crop),
         ]:
             form.addRow(label, w)
+            if isinstance(w, SliderSpin):
+                w.set_label(label)
             self.rowsof.setdefault(key, []).append(w)
             if any(w is x for x in (self.size_preset, self.per_sheet, self.recipe, self.arrange_btn, self.collage_hint,
                                    self.shuffle_btn)):
@@ -534,7 +615,10 @@ class MainWindow(QMainWindow):
         k = KEYS[self.kind.currentText()]
         for key, widgets in self.rowsof.items():
             for w in widgets:
-                w.parentWidget().layout().setRowVisible(w, key == "all" or k in key.split(","))
+                visible = key == "all" or k in key.split(",")
+                if w is self.per_sheet:   # a readout with nothing to say takes no room (no label with a blank value)
+                    visible = visible and bool(self.per_sheet.text())
+                w.parentWidget().layout().setRowVisible(w, visible)
 
     def _layout_changed(self, *_):
         if self._loading:
@@ -626,6 +710,14 @@ class MainWindow(QMainWindow):
         elif cls is Scatter:
             kw = dict(photos=self.sc_n.value(), size=self.sc_size.value() / 100, tilt=self.sc_tilt.value(),
                       border=self.sc_border.value(), seed=self.sc_seed.value())
+        elif cls is Slant:
+            kw = dict(panels=self.slant_panels.value(), slant=self.slant.value(), gutter=self.gutter.value())
+        elif cls is Fan:
+            kw = dict(photos=self.fan_n.value(), spread=self.fan_spread.value(), border=self.fan_border.value() / 100)
+        elif cls is Brick:
+            kw = dict(columns=max(2, self.cols.value()), rows=self.rows.value(), gutter=self.gutter.value())
+        elif cls is Timeline:
+            kw = dict(photos=self.tl_n.value(), dates=self.tl_dates.isChecked(), gutter=self.gutter.value())
         elif cls is Calendar:
             kw = dict(year=self.cal_year.value(), month=self.cal_month.currentIndex() + 1, months=self.cal_months.value(),
                       week_start=self.cal_week.currentText().lower(), photo_share=self.cal_share.value() / 100,
@@ -665,6 +757,8 @@ class MainWindow(QMainWindow):
             self.per_sheet.setText(f"{lay.per_page} badges per page" if lay.per_page else "too big for the page")
         elif isinstance(lay, Shapes):
             self.per_sheet.setText(f"{lay.cols} × {lay.rows} = {lay.per_page} photos")
+        elif isinstance(lay, Slant):
+            self.per_sheet.setText(f"limited to {abs(lay.effective_slant):.0f}° on this page" if lay.slant_limited else "")
         elif isinstance(lay, Ring):
             self.per_sheet.setText(f"{lay.per_page} photos per page" + (" (the centre needs 6 or more in the ring)"
                                                                          if lay.center_left_out else ""))
@@ -672,6 +766,7 @@ class MainWindow(QMainWindow):
             self.per_sheet.setText(f"{lay.per_page} cells per page" if lay.per_page else "too big for the page")
         else:
             self.per_sheet.setText("")
+        self._show_kind_rows()
 
     def _sync_controls(self):
         """Push self.layout_ into the widgets (after loading a preset)."""
@@ -722,8 +817,20 @@ class MainWindow(QMainWindow):
             self.mat_color.setCurrentText(lay.color.capitalize())
         if isinstance(lay, Bento):
             self.bento.setCurrentIndex(list(BENTO).index(lay.template))
-        if isinstance(lay, Masonry):
+        if isinstance(lay, (Masonry, Brick)):
             self.cols.setValue(lay.columns)
+        if isinstance(lay, Brick):
+            self.rows.setValue(lay.rows)
+        if isinstance(lay, Slant):
+            self.slant_panels.setValue(lay.panels)
+            self.slant.setValue(round(lay.slant))
+        if isinstance(lay, Fan):
+            self.fan_n.setValue(lay.photos)
+            self.fan_spread.setValue(round(lay.spread))
+            self.fan_border.setValue(round(lay.border * 100))
+        if isinstance(lay, Timeline):
+            self.tl_n.setValue(lay.photos)
+            self.tl_dates.setChecked(lay.dates)
         if isinstance(lay, Shapes):
             self.shape_kind.setCurrentText(next(k for k, v in SHAPE_LABELS.items() if v == lay.kind))
         if isinstance(lay, Ring):
@@ -921,11 +1028,23 @@ class MainWindow(QMainWindow):
                   for i, (_, poly, _) in enumerate(wedges)}
         return shapes, [*range(0, len(wedges), 2), *range(1, len(wedges), 2)]   # evens first, odds on top
 
+    def _cut_polygons(self):
+        """{image index: outline in widget coordinates} for layouts that cut photos to polygons, else {}."""
+        polys = self.layout_.outlines(self.page_no) if self.layout_.images else None
+        if not polys or self.preview.pixmap().isNull():
+            return {}
+        z = self.zoom if self.zoom is not None else self._fit_zoom()
+        k = self.SCREEN_DPI * z / 72
+        o = self._slot_rect(Rect(0, 0, 0, 0)).topLeft()
+        idxs = [i for i, _ in self._slots_now()]
+        return {i: QPolygonF([QPointF(o.x() + x * k, o.y() + y * k) for x, y in poly]) for i, poly in zip(idxs, polys)}
+
     def _shape(self, idx, rect):
-        """What to draw/test for a slot: the wedge for a Carousel, otherwise its rectangle."""
+        """What to draw/test for a slot: the wedge for a Carousel, the outline for a cut layout, else its rectangle."""
         if isinstance(self.layout_, Carousel):
             return self._carousel_shapes()[0][idx]
-        return self._slot_rect(rect)
+        cut = self._cut_polygons()
+        return cut.get(idx) or self._slot_rect(rect)
 
     def _slot_at(self, pos):
         slots = self._slots_now()
@@ -937,7 +1056,21 @@ class MainWindow(QMainWindow):
                 if i in by_idx and shapes[i].containsPoint(pos, Qt.FillRule.OddEvenFill):
                     return i, by_idx[i]
             return None
+        cut = self._cut_polygons()
+        if cut and slots:                                      # a photo is only "hit" inside its slanted shape
+            by_idx = dict(slots)
+            return next(((i, by_idx[i]) for i in reversed(list(cut)) if i in by_idx
+                         and cut[i].containsPoint(pos, Qt.FillRule.OddEvenFill)), None)
         return next(((i, r) for i, r in reversed(slots) if self._slot_rect(r).contains(pos)), None)
+
+    def _sort_by_date(self):
+        """Put the photos in the order they were taken (their own date, else the file's date). Undoable."""
+        imgs = self.layout_.images
+        if len(imgs) < 2 or [id(i) for i in imgs] == [id(i) for i in sorted(imgs, key=date_sort_key)]:
+            return
+        self._edit("Sort by Date", lambda: imgs.sort(key=date_sort_key))
+        self._fill_list()
+        self.refresh()
 
     def _center_photo(self):
         it = self._selected()
@@ -960,7 +1093,7 @@ class MainWindow(QMainWindow):
         """Begin repositioning the photo under the cursor, if it is cropped and has room to move."""
         idx, rect = hit
         item = self.layout_.images[idx]
-        carousel = isinstance(self.layout_, Carousel)   # a Carousel always crops, and never rotates
+        carousel = isinstance(self.layout_, (Carousel, Slant))   # these always crop, and never rotate
         if not (item.crop or carousel) or isinstance(self.layout_, (Poster, Triptych, Collage)):
             return None
         a = aspect(item)
