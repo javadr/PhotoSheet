@@ -1,6 +1,17 @@
-<p align="center"><img src="src/icons/photosheet.png" width="128" alt="PhotoSheet logo"></p>
+PhotoSheet
+==============
+[![PyPI](https://img.shields.io/pypi/v/photosheet?style=social)](https://pypi.org/project/photosheet/)
+[![code size](https://img.shields.io/github/languages/code-size/javadr/PhotoSheet?style=social)](https://github.com/javadr/PhotoSheet/archive/master.zip)
+![GitHub language count](https://img.shields.io/github/languages/count/javadr/PhotoSheet?style=social)
+![GitHub top language](https://img.shields.io/github/languages/top/javadr/PhotoSheet?style=social)
+[![GitHub forks](https://img.shields.io/github/forks/javadr/PhotoSheet?style=social)](https://github.com/javadr/PhotoSheet/network/members)
+[![GitHub stars](https://img.shields.io/github/stars/javadr/PhotoSheet?style=social)](https://github.com/javadr/PhotoSheet/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/javadr/PhotoSheet?style=social)](https://github.com/javadr/PhotoSheet/issues)
+[![Downloads](https://pepy.tech/badge/photosheet)](https://pepy.tech/project/photosheet)
+[![Downloads](https://pepy.tech/badge/photosheet/month)](https://pepy.tech/project/photosheet)
+![GitHub last commit](https://img.shields.io/github/last-commit/javadr/PhotoSheet)
 
-# PhotoSheet
+<p align="center"><img src="src/icons/photosheet.png" width="128" alt="PhotoSheet logo"></p>
 
 Put many photos on one printed sheet: passport photos, contact sheets, wallet prints, photo-booth strips,
 posters and more. PhotoSheet previews the page, lets you arrange the photos with the mouse, and then
@@ -60,15 +71,17 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 **Image handling**
 
 - ICC colour management through Pillow's `ImageCms` (per-image or printer profile, rendering intent).
-- Per-image gamma, warm/cool, sharpen, desaturate and flips.
+- Per-image gamma, warm/cool, sharpen, desaturate, auto contrast, flips and free rotation in degrees (with 90° buttons).
 - Save and open your setups as JSON presets.
 - Export to PDF (multi-page) or PNG, or print through Qt.
+- Export starts rendering as soon as you click it, while you choose the file name, and runs in the background with a progress bar; cancel the dialog and it stops.
 
 ## Install
 
 Needs Python 3.10 or newer.
 
 ```sh
+pip install photosheet  # from PyPI (or:  make pins  to install the pinned version, plus a desktop launcher)
 pip install -e .        # or:  make install-dev   (also adds a desktop launcher and icon)
 photosheet              # start the app
 ```
