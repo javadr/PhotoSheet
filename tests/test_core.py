@@ -931,3 +931,13 @@ def test_pyramid_and_diamond_counts():
     assert Pyramid(page=PageExtent(300, 300), rows=4).per_page == 10
     d = Diamond(page=PageExtent(300, 300), rows=5)
     assert d.per_page == 9 and all(r.x >= 0 and r.x + r.w <= 300 for r in d._rects())
+
+
+def test_preset_ignores_keys_from_a_newer_version(tmp_path):
+    from photosheet.core import preset
+    lay = NUp(page=PageExtent(), rows=2, cols=2)
+    lay.add(ImageItem("a.png"))
+    d = preset.to_dict(lay)
+    d["page"]["future"] = 1
+    d["images"][0]["future"] = 1
+    assert preset.from_dict(d) == lay

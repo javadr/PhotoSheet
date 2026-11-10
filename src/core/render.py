@@ -6,6 +6,7 @@ import math
 from functools import lru_cache
 import os
 import threading
+from pathlib import Path
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -74,23 +75,21 @@ class Cancelled(Exception):
     """Raised inside render_page when its cancel() callback says stop."""
 
 
-def _try_load(item, printer_profile, fast):
-    try:
-        load(item, printer_profile, fast)
-    except Exception:
-        pass  # the serial pass that follows raises it again, where it belongs
-
-
-def _prefetch(items, printer_profile, fast, progress=None, cancel=None) -> None:
-    """Decode and colour-manage the photos in parallel (Pillow and lcms release the GIL) so load() hits the cache.
+def _prefetch(items, printer_profile, fast, progress=None, cancel=None):
+    """Decode and colour-manage the photos in parallel (Pillow and lcms release the GIL).
+    Returns get(item): the photo from this call, so a small cache cannot throw it out before it is drawn.
     progress(done, total) is called from worker threads as each photo finishes."""
     todo = list({id(i): i for i in items}.values())
     done = [0]
+    got = {}
 
     def one(item):
         if cancel and cancel():
             return   # queued photos are skipped; the ones already decoding finish
-        _try_load(item, printer_profile, fast)
+        try:
+            got[id(item)] = load(item, printer_profile, fast)
+        except Exception:
+            pass  # get() loads it again serially, where the error belongs
         done[0] += 1   # shortcut: unlocked counter, an off-by-one in a progress label is harmless
         if progress:
             progress(done[0], len(todo))
@@ -102,6 +101,15 @@ def _prefetch(items, printer_profile, fast, progress=None, cancel=None) -> None:
             list(ex.map(one, todo))
     elif todo:
         one(todo[0])
+    return lambda item: got.get(id(item)) or load(item, printer_profile, fast)
+
+
+def _embedded(data):
+    """The profile stored inside a photo, or None when it is missing or damaged (the photo is then read as sRGB)."""
+    try:
+        return ImageCms.ImageCmsProfile(io.BytesIO(data)) if data else None
+    except (OSError, ImageCms.PyCMSError):
+        return None
 
 
 def _load(item: ImageItem, printer_profile: str | None = None, max_side: int | None = None) -> Image.Image:
@@ -113,9 +121,8 @@ def _load(item: ImageItem, printer_profile: str | None = None, max_side: int | N
     im = ImageOps.exif_transpose(im)
     if max_side and max(im.size) > max_side and im.mode in ("RGB", "RGBA", "L", "LA", "CMYK"):
         im.thumbnail((max_side, max_side), Image.BICUBIC, reducing_gap=2.0)   # before the colour transform: far fewer pixels
-    embedded = im.info.get("icc_profile")
-    src = (ImageCms.getOpenProfile(item.profile) if item.profile
-           else ImageCms.ImageCmsProfile(io.BytesIO(embedded)) if embedded else _srgb())
+    emb = _embedded(im.info.get("icc_profile")) if not item.profile else None
+    src = ImageCms.getOpenProfile(item.profile) if item.profile else emb or _srgb()
     if im.mode in ("1", "L", "LA", "P", "PA", "I;16"):
         im = im.convert("RGBA" if "A" in im.mode or im.mode == "PA" else "RGB")
     elif im.mode not in ("RGB", "RGBA", "CMYK"):
@@ -124,10 +131,16 @@ def _load(item: ImageItem, printer_profile: str | None = None, max_side: int | N
     if alpha:
         im = im.convert("RGB")
     dst = ImageCms.getOpenProfile(printer_profile) if printer_profile else _srgb()
-    if im.mode == "CMYK" and not (item.profile or embedded):
+    if im.mode == "CMYK" and not (item.profile or emb):
         im = im.convert("RGB")  # shortcut: no CMYK profile to go on, naive conversion
     else:
-        im = ImageCms.profileToProfile(im, src, dst, renderingIntent=item.intent, outputMode="RGB")
+        try:
+            im = ImageCms.profileToProfile(im, src, dst, renderingIntent=item.intent, outputMode="RGB")
+        except ImageCms.PyCMSError:
+            if not emb:
+                raise
+            # the file's own profile does not fit its pixels (e.g. a gray profile): treat it as sRGB
+            im = ImageCms.profileToProfile(im.convert("RGB"), _srgb(), dst, renderingIntent=item.intent, outputMode="RGB")
     if item.flip_h:
         im = ImageOps.mirror(im)
     if item.flip_v:
@@ -258,6 +271,36 @@ def _draw_shape(draw: ImageDraw.ImageDraw, kind: str, r: Rect, rgb: tuple, s: fl
         draw.rectangle(box, outline=rgb, width=max(1, round(0.6 * s)))
 
 
+_POSTER: tuple = (None, None)   # (key, image) of the last poster drawn: its pages are drawn one after another
+
+
+def _poster(layout, item, s, printer_profile, background, fast) -> Image.Image:
+    """The whole poster canvas. Cached once, so each page only crops its tile instead of resizing the photo again."""
+    global _POSTER
+    key = (repr(item), _key(item, printer_profile, fast), layout.poster_w, layout.poster_h, s, background, fast)
+    cached = _POSTER   # one read: another render thread may replace _POSTER meanwhile
+    if cached[0] == key:
+        return cached[1]
+    poster = Image.new("RGB", (round(layout.poster_w * s), round(layout.poster_h * s)), background)
+    _place(poster, item, load(item, printer_profile, fast), Rect(0, 0, layout.poster_w, layout.poster_h), s, fast)
+    _POSTER = (key, poster)
+    return poster
+
+
+def save_pages(pages, path: str, dpi: int, after=None) -> None:
+    """Write pages as one PDF, or as PNG/JPEG files named stem-1.ext, stem-2.ext ... (just `path` for one page).
+    A name without an extension gets .png. after(i) is called once page i is saved."""
+    p = Path(path)
+    if p.suffix.lower() == ".pdf":
+        pages[0].save(p, save_all=True, append_images=pages[1:], resolution=dpi)
+        return
+    p = p if p.suffix else p.with_suffix(".png")
+    for i, im in enumerate(pages):
+        im.save(p.with_name(f"{p.stem}-{i + 1}{p.suffix}") if len(pages) > 1 else p, dpi=(dpi,) * 2)
+        if after:
+            after(i)
+
+
 def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str | None = None,
                 background=(255, 255, 255), fast: bool = False, progress=None, cancel=None, placing=None) -> Image.Image:
     s = dpi / 72
@@ -278,8 +321,7 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
     if isinstance(layout, Poster):
         idx, _, win = layout.tile_window(page)
         item = layout.images[idx]
-        poster = Image.new("RGB", (round(layout.poster_w * s), round(layout.poster_h * s)), background)
-        _place(poster, item, load(item, printer_profile, fast), Rect(0, 0, layout.poster_w, layout.poster_h), s, fast)
+        poster = _poster(layout, item, s, printer_profile, background, fast)
         tile = poster.crop((round(win.x * s), round(win.y * s),
                             round((win.x + win.w) * s), round((win.y + win.h) * s)))
         canvas.paste(tile, (round(p.left * s), round(p.top * s)))
@@ -298,14 +340,14 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         return canvas
     if hasattr(layout, "pile"):   # Scatter and Fan: tilted cards with a shadow
         pile = layout.pile(page)
-        _prefetch([c[0] for c in pile], printer_profile, fast, progress, cancel)
+        get = _prefetch([c[0] for c in pile], printer_profile, fast, progress, cancel)
         check()
         for k, (item, photo, card, angle) in enumerate(pile):
             check()
             placed(k, len(pile))
             w, h = max(1, round(card.w * s)), max(1, round(card.h * s))
             c = Image.new("RGB", (w, h), (255, 255, 255))
-            _place(c, replace(item, crop=True, rotation=0), load(item, printer_profile, fast),
+            _place(c, replace(item, crop=True, rotation=0), get(item),
                    Rect(photo.x - card.x, photo.y - card.y, photo.w, photo.h), s, fast)
             c = c.convert("RGBA")
             c.putalpha(Image.new("L", (w, h), 255))
@@ -323,14 +365,14 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         return canvas
     if isinstance(layout, Carousel):
         wedges = layout.wedges()
-        _prefetch([w[0] for w in wedges], printer_profile, fast, progress, cancel)
+        get = _prefetch([w[0] for w in wedges], printer_profile, fast, progress, cancel)
         check()
         for k, i in enumerate([*range(0, len(wedges), 2), *range(1, len(wedges), 2)]):  # evens, then odds on top
             check()
             placed(k, len(wedges))
             item, poly, box = wedges[i]
             tmp = Image.new("RGB", canvas.size, background)
-            _place(tmp, replace(item, crop=True, rotation=0, mask=None), load(item, printer_profile, fast), box, s, fast)
+            _place(tmp, replace(item, crop=True, rotation=0, mask=None), get(item), box, s, fast)
             mask = Image.new("L", canvas.size, 0)
             ImageDraw.Draw(mask).polygon([(x * s, y * s) for x, y in poly], fill=255)
             canvas.paste(tmp, mask=_fade(mask, layout.feather * s / 2))
@@ -351,13 +393,13 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
                        fill=(255, 255, 255), outline=(205, 205, 205), width=max(1, round(0.5 * s)))
     if isinstance(layout, Collage):   # the box keeps the photo's shape; the whole box turns about its centre
         slots = [(replace(i, angle=0), r, i.angle) for i, r in layout.slots(page)]
-        _prefetch([i for i, _, _ in slots], printer_profile, fast, progress, cancel)
+        get = _prefetch([i for i, _, _ in slots], printer_profile, fast, progress, cancel)
         for k, (item, r, angle) in enumerate(slots):
             check()
             placed(k, len(slots))
             w, h = max(1, round(r.w * s)), max(1, round(r.h * s))
             tmp = Image.new("RGBA", (w, h), (255, 255, 255, 0))
-            _place(tmp, item, load(item, printer_profile, fast), Rect(0, 0, r.w, r.h), s, fast)
+            _place(tmp, item, get(item), Rect(0, 0, r.w, r.h), s, fast)
             if angle:
                 tmp = tmp.rotate(-angle, Image.BICUBIC, expand=True, fillcolor=(255, 255, 255, 0))   # PIL turns counter-clockwise
             tmp.putalpha(_fade(tmp.getchannel("A"), layout.feather * s / 2))
@@ -365,25 +407,25 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         return canvas
     polys = layout.outlines(page)
     slots = layout.slots(page)
-    _prefetch([i for i, _ in slots], printer_profile, fast, progress, cancel)
+    get = _prefetch([i for i, _ in slots], printer_profile, fast, progress, cancel)
     check()
     for k, (item, slot) in enumerate(slots):
         check()
         placed(k, len(slots))
         if polys is not None and k < len(polys):
-            _place_cut(canvas, item, load(item, printer_profile, fast), slot, polys[k], s, fast, background, layout.feather)
+            _place_cut(canvas, item, get(item), slot, polys[k], s, fast, background, layout.feather)
             continue
         if round_photos:
             item = replace(item, crop=True)   # a circle is always filled
         if layout.feather:   # draw on a transparent tile, soften its edge, then lay it over what is already there
             w, h = max(1, round(slot.w * s)), max(1, round(slot.h * s))
             tile = Image.new("RGBA", (w, h), (255, 255, 255, 0))   # white, not black: a soft edge must not pick up a dark fringe
-            _place(tile, item, load(item, printer_profile, fast), Rect(0, 0, slot.w, slot.h), s, fast,
+            _place(tile, item, get(item), Rect(0, 0, slot.w, slot.h), s, fast,
                    shape=layout.shape if round_photos else None)
             tile.putalpha(_fade(tile.getchannel("A"), layout.feather * s / 2))
             canvas.paste(tile, (round(slot.x * s), round(slot.y * s)), tile)
             continue
-        _place(canvas, item, load(item, printer_profile, fast), slot, s, fast, shape=layout.shape if round_photos else None)
+        _place(canvas, item, get(item), slot, s, fast, shape=layout.shape if round_photos else None)
     if round_photos:
         guides()   # a cut circle must show on top of the photo's edge
     for text, band, *color in layout.captions(page):   # a layout may colour single captions (calendar weekends)

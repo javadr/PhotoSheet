@@ -29,17 +29,22 @@ def to_dict(layout: Layout) -> dict:
     return d
 
 
+def _known(cls, d: dict) -> dict:
+    """Only the keys this version knows, so a file from a newer version still opens."""
+    names = {f.name for f in fields(cls)}
+    return {k: v for k, v in d.items() if k in names}
+
+
 def from_dict(d: dict) -> Layout:
     d = dict(d)
     try:
         cls = TYPES[d.pop("type")]
     except KeyError as e:
         raise ValueError(f"unknown or missing layout type: {e}") from None
-    known = {f.name for f in fields(cls)}
-    kw = {k: v for k, v in d.items() if k in known and k not in ("page", "images")}
-    page = PageExtent(**d.get("page", {}))
+    kw = {k: v for k, v in _known(cls, d).items() if k not in ("page", "images")}
+    page = PageExtent(**_known(PageExtent, d.get("page", {})))
     lay = cls(page=page, **kw)
-    lay.images = [ImageItem(**i) for i in d.get("images", [])]
+    lay.images = [ImageItem(**_known(ImageItem, i)) for i in d.get("images", [])]
     for i in lay.images:   # JSON turns tuples into lists
         i.box = tuple(i.box) if i.box else None
     if isinstance(lay, Package):
@@ -50,8 +55,9 @@ def from_dict(d: dict) -> Layout:
 
 
 def save(layout: Layout, path: str) -> None:
+    text = json.dumps(to_dict(layout), indent=2)   # built first: an error here must not empty the existing file
     with open(path, "w") as f:
-        json.dump(to_dict(layout), f, indent=2)
+        f.write(text)
 
 
 def load(path: str) -> Layout:

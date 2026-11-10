@@ -7,6 +7,7 @@ and writes its report to a file as well, because a windowed Windows program has 
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -147,6 +148,7 @@ def run(report: str | None = None) -> int:
             continue
         check(name, fn)
 
+    shutil.rmtree(tmp, ignore_errors=True)
     text = "\n".join(lines) + f"\n{'SELF-TEST PASSED' if state['ok'] else 'SELF-TEST FAILED'}\n"
     if report:
         Path(report).write_text(text, encoding="utf-8")

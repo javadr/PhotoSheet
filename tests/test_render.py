@@ -668,3 +668,31 @@ def test_feather_softens_edges_in_every_overlapping_layout(red):
             im = render_page(lay, 0, dpi=72)
             return sum(n for n, p in im.getcolors(10**6) if p not in ((255, 0, 0), (255, 255, 255)) and p[0] > 200 and p[1] > 0)
         assert dark_edge(20) > dark_edge(0), cls.__name__   # more blended edge pixels (red mixed with the paper)
+
+
+def test_damaged_embedded_profile_is_read_as_srgb(tmp_path, red):
+    bad = tmp_path / "bad.png"
+    Image.new("RGB", (50, 50), (9, 9, 9)).save(bad, icc_profile=b"not a profile" * 20)
+    n = NUp(page=PageExtent(100, 100), rows=1, cols=2)
+    n.add(ImageItem(red))
+    n.add(ImageItem(str(bad)))
+    assert render_page(n, 0, dpi=72).size == (100, 100)   # used to raise OSError for the whole sheet
+
+
+@pytest.mark.parametrize("name", ["sheet", "sheet.png", "sub.dir/sheet"])
+def test_cli_output_name(tmp_path, red, name):
+    (tmp_path / "sub.dir").mkdir()
+    out = tmp_path / name
+    assert cli.main([red, red, "-o", str(out), "--rows", "1", "--cols", "1", "--dpi", "30"]) == 0
+    stem = out.with_suffix("") if out.suffix == ".png" else out
+    assert (stem.parent / f"{stem.name}-1.png").exists() and (stem.parent / f"{stem.name}-2.png").exists()
+
+
+def test_poster_pages_share_one_canvas(red):
+    from photosheet.core import render
+    lay = Poster(page=PageExtent(200, 200), poster_w=400, poster_h=400)
+    lay.add(ImageItem(red, crop=True))
+    render_page(lay, 0, dpi=30)
+    first = render._POSTER[1]
+    render_page(lay, 1, dpi=30)
+    assert render._POSTER[1] is first

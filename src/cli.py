@@ -10,7 +10,8 @@ from .core.layouts import (BENTO, MM, RECIPES, SHAPE_NAMES, Badges, Bento, Calen
                            FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic, NUp, Package, Passport,
                            Brick, Checker, Diamond, Pyramid, Fan, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs, Strip,
                            Timeline, Triptych)
-from .core.render import render_all
+from .core.preset import TYPES
+from .core.render import render_all, save_pages
 
 PAGES = {"a4": (595, 842), "letter": (612, 792), "a5": (420, 595), "4x6": (288, 432), "5x7": (360, 504),
          "8x10": (576, 720)}
@@ -92,8 +93,10 @@ def build(args) -> NUp | Single | Poster:
         lay = Mosaic(page=page, row_height=args.row_height * MM)
     elif args.layout == "carousel":
         lay = Carousel(page=page, segments=args.segments)
-    else:
+    elif args.layout == "poster":
         lay = Poster(page=page, poster_w=args.poster_w * 72, poster_h=args.poster_h * 72)
+    else:
+        raise ValueError(f"no builder for layout {args.layout!r}")
     for path in args.images:
         for _ in range(args.repeat):
             lay.add(ImageItem(path, crop=args.crop))
@@ -117,10 +120,7 @@ def main(argv=None) -> int:
     ap.add_argument("-V", "--version", action=_ShowVersion)
     ap.add_argument("images", nargs="+")
     ap.add_argument("-o", "--out", required=True, help=".pdf (multipage) or .png (page number appended)")
-    ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic", "strip", "passport", "polaroid", "triptych", "package",
-                                                       "collage", "framed", "badges", "feature", "filmstrip", "bento", "spiral",
-                                                       "honeycomb", "calendar", "masonry", "shapes", "ring", "scatter", "slant", "fan", "timeline",
-                                                       "brick", "checker", "stairs", "pyramid", "diamond"], default="nup")
+    ap.add_argument("--layout", choices=list(TYPES), default="nup")
     ap.add_argument("--rows", type=int, help="grid rows (default: 3, Shapes 3, Brick 6)")
     ap.add_argument("--cols", type=int, help="grid columns (default: 3, Shapes 2, Masonry 3, Brick 6)")
     ap.add_argument("--segments", type=int, default=4)
@@ -186,12 +186,7 @@ def main(argv=None) -> int:
     ap.add_argument("--printer-profile")
     args = ap.parse_args(argv)
     pages = render_all(build(args), dpi=args.dpi, printer_profile=args.printer_profile)
-    if args.out.lower().endswith(".pdf"):
-        pages[0].save(args.out, save_all=True, append_images=pages[1:], resolution=args.dpi)
-    else:
-        stem, dot, ext = args.out.rpartition(".")
-        for i, im in enumerate(pages):
-            im.save(f"{stem}-{i + 1}{dot}{ext}" if len(pages) > 1 else args.out, dpi=(args.dpi,) * 2)
+    save_pages(pages, args.out, args.dpi)
     return 0
 
 

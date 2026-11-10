@@ -27,7 +27,7 @@ from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Ben
                             Fan, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic,
                             NUp, Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs,
                             Strip, Timeline, Triptych, aspect, date_sort_key, snap_delta)
-from ..core.render import Cancelled, render_page, uncached
+from ..core.render import Cancelled, render_page, save_pages, uncached
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
          "4 × 6 in": (288, 432), "5 × 7 in": (360, 504), "8 × 10 in": (576, 720)}   # portrait points; Orientation turns them
@@ -226,13 +226,7 @@ class _ExportJob(QRunnable):
                 return
             self.sig.export_progress.emit(920, "Saving")
             f = self.path
-            if f.lower().endswith(".pdf"):
-                pages[0].save(f, save_all=True, append_images=pages[1:], resolution=300)
-            else:
-                stem, _, ext = f.rpartition(".")
-                for i, im in enumerate(pages):
-                    im.save(f"{stem}-{i + 1}.{ext}" if n > 1 else f, dpi=(300, 300))
-                    self.sig.export_progress.emit(920 + 80 * (i + 1) // n, "Saving")
+            save_pages(pages, f, 300, after=lambda i: self.sig.export_progress.emit(920 + 80 * (i + 1) // n, "Saving"))
             res = None
         except Cancelled:
             return
@@ -1883,7 +1877,10 @@ class MainWindow(QMainWindow):
     def save_preset(self):
         f, _ = QFileDialog.getSaveFileName(self, "Save preset", "sheet.json", "Preset (*.json)")
         if f:
-            preset.save(self.layout_, f)
+            try:
+                preset.save(self.layout_, f)
+            except OSError as e:
+                QMessageBox.warning(self, "Save preset", f"Could not save {os.path.basename(f)}: {e}")
 
     def export(self):
         if self._export:
@@ -1948,8 +1945,12 @@ class MainWindow(QMainWindow):
             return
         dpi = min(pr.resolution(), 300)
         painter = QPainter(pr)
-        for i in range(self.layout_.pages):
-            if i:
-                pr.newPage()
-            painter.drawImage(painter.viewport(), to_qimage(render_page(self.layout_, i, dpi)))
-        painter.end()
+        try:
+            for i in range(self.layout_.pages):
+                if i:
+                    pr.newPage()
+                painter.drawImage(painter.viewport(), to_qimage(render_page(self.layout_, i, dpi)))
+        except Exception as e:
+            QMessageBox.warning(self, "Print", f"Printing stopped: {e}")
+        finally:
+            painter.end()
