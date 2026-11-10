@@ -783,3 +783,89 @@ def test_collage_resize_stops_at_the_page_margin_and_keeps_the_held_corner(app, 
     assert (x, y) == (x0, y0)                                    # top-left held still
     assert x + nw <= pg.left + pg.imageable_w + 1e-6 and y + nh <= pg.top + pg.imageable_h + 1e-6
     assert abs(nw / nh - bw / bh) < 1e-9 and nw > bw             # grew as far as the page allows, same shape
+
+
+# ---- Framed print, Badges, Feature, Film strip ----
+
+def test_last_four_layouts_keep_photos_show_their_controls_and_roundtrip_presets(app, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import MM, Badges, Feature, Filmstrip, FramedPrint
+    w = _win_with_images(tmp_path, 5)
+    w.show()
+    w.kind.setCurrentText("Framed print")
+    assert isinstance(w.layout_, FramedPrint) and len(w.layout_.images) == 5
+    assert w.mat.isVisible() and w.mat_color.isVisible() and w.caption.isVisible() and not w.diameter.isVisible()
+    w.mat.setValue(60)
+    w.mat_color.setCurrentText("Black")
+    w.caption.setCurrentText("Number")
+    assert (w.layout_.mat, w.layout_.color, w.layout_.caption) == (60, "black", "number") and w.layout_.pages == 5
+    w.kind.setCurrentText("Badges")
+    assert isinstance(w.layout_, Badges) and w.diameter.isVisible() and w.staggered.isVisible() and w.marks.isVisible()
+    assert w.per_sheet.isVisible() and "badges per page" in w.per_sheet.text() and not w.mat.isVisible()
+    w.diameter.setValue(58)
+    w.staggered.setChecked(False)
+    assert abs(w.layout_.diameter - 58 * MM) < 1e-6 and not w.layout_.staggered
+    n_square = w.layout_.per_page
+    w.staggered.setChecked(True)
+    assert w.layout_.per_page >= n_square and str(w.layout_.per_page) in w.per_sheet.text()
+    w.diameter.setValue(200)                                      # bigger than the page
+    assert w.per_sheet.text() == "too big for the page" and w.layout_.slots(0) == []
+    w.diameter.setValue(38)
+    w.kind.setCurrentText("Feature")
+    assert isinstance(w.layout_, Feature) and w.thumbs.isVisible() and w.side.isVisible() and w.hero_share.isVisible()
+    w.thumbs.setValue(2)
+    w.side.setChecked(True)
+    w.hero_share.setValue(60)
+    assert (w.layout_.thumbs, w.layout_.side, w.layout_.hero_share) == (2, True, 0.6) and w.layout_.pages == 2
+    for setup, check in (
+        (lambda: (w.kind.setCurrentText("Framed print"), w.mat.setValue(44), w.mat_color.setCurrentText("Cream")),
+         lambda: (w.kind.currentText(), w.mat.value(), w.mat_color.currentText()) == ("Framed print", 44, "Cream")),
+        (lambda: (w.kind.setCurrentText("Badges"), w.diameter.setValue(44), w.staggered.setChecked(False)),
+         lambda: (w.kind.currentText(), round(w.diameter.value()), w.staggered.isChecked()) == ("Badges", 44, False)),
+        (lambda: (w.kind.setCurrentText("Feature"), w.thumbs.setValue(3), w.side.setChecked(False), w.hero_share.setValue(55)),
+         lambda: (w.kind.currentText(), w.thumbs.value(), w.side.isChecked(), w.hero_share.value()) == ("Feature", 3, False, 55)),
+    ):
+        setup()
+        f = str(tmp_path / "p.json")
+        preset.save(w.layout_, f)
+        w.kind.setCurrentText("N-up")
+        w.layout_ = preset.load(f)
+        w._sync_controls()
+        assert check()
+
+
+def test_film_strip_sets_35mm_defaults_and_booth_strip_gets_its_own_back(app, tmp_path):
+    from photosheet.core.layouts import MM, Filmstrip, Strip
+    w = _win_with_images(tmp_path, 7)
+    w.show()
+    w.kind.setCurrentText("Photo strip")
+    assert (w.strip_w.value(), w.frames.value()) == (51, 4)
+    w.kind.setCurrentText("Film strip")
+    assert type(w.layout_) is Filmstrip and (w.strip_w.value(), w.frames.value()) == (35, 6)
+    assert w.frames.isVisible() and w.strip_w.isVisible() and not w.strip_h.isVisible()    # height follows from the frames
+    assert abs(w.layout_.strip_w - 35 * MM) < 1e-6 and len(w.layout_.slots(0)) == 7
+    w.frames.setValue(3)
+    assert w.layout_.frames == 3 and w.layout_.strip_h < 35 * MM * 6
+    w.kind.setCurrentText("Photo strip")                                                  # switching back restores booth defaults
+    assert type(w.layout_) is Strip and (w.strip_w.value(), w.frames.value()) == (51, 4) and w.strip_h.isVisible()
+    w.kind.setCurrentText("N-up")
+    w.kind.setCurrentText("Photo strip")
+    w.strip_w.setValue(60)                                                                 # a tuned booth strip survives other layouts
+    w.kind.setCurrentText("N-up")
+    w.kind.setCurrentText("Photo strip")
+    assert w.strip_w.value() == 60
+
+
+def test_page_drag_swaps_badges_and_feature_photos(app, tmp_path):
+    w = _ready_window(app, tmp_path)
+    names = lambda: [i.path[-5:] for i in w.layout_.images]
+    for kind in ("Badges", "Feature"):
+        w.layout_.images[:] = sorted(w.layout_.images, key=lambda i: i.path)
+        w.kind.setCurrentText(kind)
+        slots = dict(w._slots_now())
+        a, c = w._slot_rect(slots[0]).center(), w._slot_rect(slots[2]).center()
+        _mouse(app, w, "press", a)
+        _mouse(app, w, "move", (a + c) / 2)
+        _mouse(app, w, "move", c)
+        _mouse(app, w, "release", c)
+        assert names() == ["2.png", "1.png", "0.png"], kind

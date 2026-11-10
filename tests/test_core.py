@@ -308,3 +308,104 @@ def test_snap_delta_and_collage_snap_targets(tmp_path):
     assert b[0] in xs and b[0] + b[2] in xs                                          # the other photo's edges
     xs0, _ = c.snap_targets(skip=None)
     assert len(xs0) == len(xs) + 3                                                  # without skip, photo 0's 3 x-lines are included
+
+
+# ---- Framed print, Badges, Feature, Film strip ----
+
+def _rects_disjoint(rects):
+    for i, a in enumerate(rects):
+        for b in rects[i + 1:]:
+            if not (a.x + a.w <= b.x + 1e-6 or b.x + b.w <= a.x + 1e-6 or a.y + a.h <= b.y + 1e-6 or b.y + b.h <= a.y + 1e-6):
+                return False
+    return True
+
+
+def test_framed_print_mat_photo_caption_and_colours(tmp_path):
+    from photosheet.core.layouts import MAT_COLORS, FramedPrint
+    f = FramedPrint(page=PageExtent(400, 500), mat=40, caption="both")
+    f.add(_img(tmp_path, "wide.png", 300, 100))
+    (img, photo), = f.slots(0)
+    card = f._card()
+    assert photo.x >= card.x + 40 - 1e-6 and photo.x + photo.w <= card.x + card.w - 40 + 1e-6      # mat on both sides
+    assert photo.y >= card.y + 40 - 1e-6 and abs(photo.w / photo.h - 3) < 1e-9                       # keeps the photo's shape
+    (text, band), = f.captions(0)
+    assert text == "1  wide.png" and band.y >= photo.y + photo.h and band.y + band.h <= card.y + card.h
+    kinds = [k for k, _, _ in f.shapes(0)]
+    assert kinds == ["card", "frame"] and f.shapes(0)[0][2] == MAT_COLORS["white"]
+    assert FramedPrint(color="black").caption_color[0] > 200 and f.caption_color[0] < 100            # readable on either mat
+    img.crop = True
+    assert f.slots(0)[0][1] == f._opening()                                                          # cropped: fills the opening
+    assert f.pages == 1 and f.slots(3) == []
+    for bad in (dict(mat=-1), dict(color="pink"), dict(caption="x")):
+        with pytest.raises(ValueError):
+            FramedPrint(**bad)
+
+
+def test_badges_circles_do_not_overlap_stay_on_the_page_and_stagger_fits_more():
+    import math
+
+    from photosheet.core.layouts import Badges
+    pg = PageExtent(595, 842)
+    pg.set_margins(20, 20, 20, 20)
+    hexed, square = Badges(page=pg), Badges(page=pg, staggered=False)
+    assert hexed.per_page > square.per_page >= 20
+    for b in (hexed, square):
+        for i in range(b.per_page + 3):
+            b.add(ImageItem(f"{i}.jpg"))
+        assert b.pages == 2 and len(b.slots(0)) == b.per_page and len(b.slots(1)) == 3
+        cs = [(r.x + r.w / 2, r.y + r.h / 2) for _, r in b.slots(0)]
+        d = b.diameter
+        assert all(20 - 1e-6 <= c[0] - d / 2 and c[0] + d / 2 <= 575 + 1e-6 and 20 - 1e-6 <= c[1] - d / 2 and c[1] + d / 2 <= 822 + 1e-6 for c in cs)
+        assert min(math.dist(a, c) for i, a in enumerate(cs) for c in cs[i + 1:]) >= d + b.gutter - 1e-6   # neighbours never touch
+    assert Badges(page=pg, diameter=2000).per_page == 0 and Badges(page=pg, diameter=2000).pages == 1     # too big: empty, no crash
+    assert Badges(page=pg).shape == "ellipse"
+    hexed.marks = True
+    assert len(hexed.cut_guides(0)) == 48 * hexed.per_page
+    with pytest.raises(ValueError):
+        Badges(diameter=0)
+
+
+def test_feature_hero_and_thumbnails_on_every_page_both_orientations():
+    from photosheet.core.layouts import Feature
+    pg = PageExtent(400, 600)
+    for side in (False, True):
+        f = Feature(page=pg, thumbs=3, side=side, hero_share=0.6, gutter=10)
+        for i in range(9):
+            f.add(ImageItem(f"{i}.jpg"))
+        assert f.per_page == 4 and f.pages == 3
+        rects = [r for _, r in f.slots(0)]
+        assert len(rects) == 4 and _rects_disjoint(rects)
+        hero, thumbs = rects[0], rects[1:]
+        assert hero.w * hero.h > 2 * max(t.w * t.h for t in thumbs)                          # the hero is clearly the biggest
+        assert all(r.x >= -1e-6 and r.y >= -1e-6 and r.x + r.w <= 400 + 1e-6 and r.y + r.h <= 600 + 1e-6 for r in rects)
+        assert len({round(t.w, 6) for t in thumbs}) == 1 and len({round(t.h, 6) for t in thumbs}) == 1
+        assert (thumbs[0].x > hero.x + hero.w - 1e-6) if side else (thumbs[0].y > hero.y + hero.h - 1e-6)
+        assert [i.path for i, _ in f.slots(2)] == ["8.jpg"]                                  # the last page holds the remainder
+    for bad in (dict(thumbs=0), dict(hero_share=0.1), dict(hero_share=0.95)):
+        with pytest.raises(ValueError):
+            Feature(**bad)
+
+
+def test_filmstrip_frames_are_2_to_3_holes_on_both_edges_and_it_fits_the_page():
+    from photosheet.core.layouts import MM, Filmstrip
+    pg = PageExtent(595, 842)
+    pg.set_margins(20, 20, 20, 20)
+    f = Filmstrip(page=pg, frames=6)
+    assert abs(f.strip_w - 35 * MM) < 1e-6 and f.strip_h <= pg.imageable_h + 1e-6
+    for i in range(7):
+        f.add(ImageItem(f"{i}.jpg"))
+    rects = [r for _, r in f.slots(0)]
+    assert len(rects) == 7 and all(abs(r.h / r.w - 1.5) < 1e-9 for r in rects)               # 24 x 36 mm frames
+    assert _rects_disjoint(rects)
+    shapes = f.shapes(0)
+    strips = [r for k, r, _ in shapes if k == "rect"]
+    holes = [r for k, r, _ in shapes if k == "round"]
+    assert len(strips) == 2 and f.cut_guides(0) == []                                         # 7 photos = 2 strips of 6
+    assert len(holes) > 40 and all(any(s.x <= h.x and h.x + h.w <= s.x + s.w and s.y <= h.y and h.y + h.h <= s.y + s.h for s in strips) for h in holes)
+    assert not any(h.x < r.x + r.w and h.x + h.w > r.x and h.y < r.y + r.h and h.y + h.h > r.y for h in holes for r in rects)   # holes stay clear of frames
+    xs = {round(h.x - next(s.x for s in strips if s.x <= h.x < s.x + s.w), 3) for h in holes}
+    assert len(xs) == 2                                                                         # one column of holes per edge
+    tall = Filmstrip(page=pg, frames=12)                                                      # 12 frames would not fit: film is scaled down
+    assert tall.strip_h <= pg.imageable_h * (1 + 1e-9) and tall.strip_w < 35 * MM
+    with pytest.raises(ValueError):
+        Filmstrip(page=pg, frames=0)

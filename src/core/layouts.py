@@ -1,6 +1,7 @@
 """Layout geometry: which slot each image gets, and how many pages. No rendering, no Qt."""
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -62,6 +63,15 @@ class Layout:
 
     def cards(self, page: int) -> list[Rect]:
         """White cards drawn under the photos (Polaroid), in points."""
+        return []
+
+    # Rendering hooks. shape "ellipse" crops every photo to a circle; the colours style captions and cards.
+    shape = "rect"
+    caption_color = (70, 70, 70)
+
+    def shapes(self, page: int) -> list[tuple[str, Rect, tuple]]:
+        """Decoration drawn under the photos: (kind, rect, rgb). Kinds: card (filled, outlined), rect, round,
+        ellipse (filled) and frame (outline only)."""
         return []
 
 
@@ -708,3 +718,207 @@ def snap_delta(values: list[float], targets: list[float], tol: float) -> float |
             if abs(d) <= tol and (best is None or abs(d) < abs(best)):
                 best = d
     return best
+
+
+MAT_COLORS = {"white": (255, 255, 255), "black": (20, 20, 20), "cream": (247, 241, 225)}
+
+
+@dataclass
+class FramedPrint(Layout):
+    """One photo per page matted like a framed print: a wide border, a thin line around the picture, a caption.
+
+    The mat fills the imageable area; the photo sits inside it at its own shape (or fills the opening if cropped).
+    """
+    mat: float = 36.0
+    color: str = "white"          # white | black | cream
+    caption: str = "none"         # none | filename | number | both, under the photo
+    caption_pt: float = 10.0
+
+    def __post_init__(self):
+        if self.mat < 0:
+            raise ValueError("mat must be >= 0")
+        if self.color not in MAT_COLORS:
+            raise ValueError(f"unknown mat colour {self.color!r}")
+        if self.caption not in ("none", "filename", "number", "both"):
+            raise ValueError(f"unknown caption mode {self.caption!r}")
+
+    @property
+    def pages(self) -> int:
+        return max(1, len(self.images))
+
+    @property
+    def caption_color(self) -> tuple:
+        return (225, 225, 225) if self.color == "black" else (70, 70, 70)
+
+    def _card(self) -> Rect:
+        p = self.page
+        return Rect(p.left, p.top, p.imageable_w, p.imageable_h)
+
+    def _opening(self) -> Rect:
+        c, m = self._card(), self.mat
+        bottom = m + (self.caption_pt * 2.4 if self.caption != "none" else 0.0)
+        return Rect(c.x + m, c.y + m, max(1.0, c.w - 2 * m), max(1.0, c.h - m - bottom))
+
+    def _photo(self, page: int) -> Rect:
+        o, img = self._opening(), self.images[page]
+        if img.crop:
+            return o
+        a = aspect(img)
+        w, h = (o.h * a, o.h) if o.w / o.h > a else (o.w, o.w / a)
+        return Rect(o.x + (o.w - w) / 2, o.y + (o.h - h) / 2, w, h)
+
+    def slots(self, page: int):
+        return [(self.images[page], self._photo(page))] if page < len(self.images) else []
+
+    def shapes(self, page: int):
+        if page >= len(self.images):
+            return []
+        r = self._photo(page)
+        line = (90, 90, 90) if self.color == "black" else (185, 185, 185)
+        return [("card", self._card(), MAT_COLORS[self.color]), ("frame", Rect(r.x - 2, r.y - 2, r.w + 4, r.h + 4), line)]
+
+    def captions(self, page: int):
+        if self.caption == "none" or page >= len(self.images):
+            return []
+        c, n = self._card(), page + 1
+        name = os.path.basename(self.images[page].path)
+        text = {"filename": name, "number": str(n), "both": f"{n}  {name}"}[self.caption]
+        return [(text, Rect(c.x + self.mat, c.y + c.h - self.mat - self.caption_pt * 2.1, c.w - 2 * self.mat,
+                            self.caption_pt * 1.8))]
+
+
+@dataclass
+class Badges(Layout):
+    """Round prints for button badges, stickers or coasters: circles packed on the page, optionally staggered.
+
+    The photo is cropped to the circle. Common pin-back badge graphics: 25, 32, 38, 44, 58 and 75 mm.
+    """
+    diameter: float = 38 * MM
+    gutter: float = 6.0
+    staggered: bool = True     # offset every other row so the circles nest (fits about 15% more)
+    shape = "ellipse"
+
+    def __post_init__(self):
+        if self.diameter <= 0 or self.gutter < 0:
+            raise ValueError("diameter must be > 0 and gutter >= 0")
+
+    def _positions(self) -> list[tuple[float, float]]:
+        p, d, g = self.page, self.diameter, self.gutter
+        pitch = d + g
+        if p.imageable_w < d or p.imageable_h < d:
+            return []
+        row_pitch = pitch * math.sqrt(3) / 2 if self.staggered else pitch
+        rows = int((p.imageable_h - d) // row_pitch + 1e-9) + 1
+        even = int((p.imageable_w + g) // pitch)
+        odd = int((p.imageable_w + g - pitch / 2) // pitch) if self.staggered else even
+        counts = [even if r % 2 == 0 else odd for r in range(rows)]
+        offs = [pitch / 2 if self.staggered and r % 2 else 0.0 for r in range(rows)]
+        block_w = max((o + n * pitch - g for o, n in zip(offs, counts) if n), default=0.0)
+        x0 = p.left + (p.imageable_w - block_w) / 2
+        y0 = p.top + (p.imageable_h - ((rows - 1) * row_pitch + d)) / 2
+        return [(x0 + offs[r] + c * pitch, y0 + r * row_pitch) for r in range(rows) for c in range(counts[r])]
+
+    @property
+    def per_page(self) -> int:
+        return len(self._positions())
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.per_page)) if self.per_page else 1
+
+    def slots(self, page: int):
+        pos = self._positions()
+        start = page * len(pos)
+        return [(img, Rect(x, y, self.diameter, self.diameter))
+                for img, (x, y) in zip(self.images[start:start + len(pos)], pos)]
+
+    def cut_guides(self, page: int):
+        if not self.marks:
+            return []
+        out, r = [], self.diameter / 2
+        for _, c in self.slots(page):
+            cx, cy = c.x + r, c.y + r
+            pts = [(cx + r * math.cos(2 * math.pi * i / 48), cy + r * math.sin(2 * math.pi * i / 48)) for i in range(49)]
+            out += [(a[0], a[1], b[0], b[1]) for a, b in zip(pts, pts[1:])]
+        return out
+
+
+@dataclass
+class Feature(Layout):
+    """One large hero photo with a row (or column) of smaller photos next to it, repeated page after page.
+
+    Each page takes 1 + thumbs photos in order: the first is the hero.
+    """
+    thumbs: int = 4
+    side: bool = False         # thumbnails in a column beside the hero instead of a row beneath it
+    hero_share: float = 0.7    # the hero's share of the page height (or width, when side)
+    gutter: float = 6.0
+
+    def __post_init__(self):
+        if self.thumbs < 1 or not 0.2 <= self.hero_share <= 0.9 or self.gutter < 0:
+            raise ValueError("thumbs must be >= 1, hero_share between 0.2 and 0.9, gutter >= 0")
+
+    @property
+    def per_page(self) -> int:
+        return 1 + self.thumbs
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.per_page))
+
+    def _rects(self) -> list[Rect]:
+        p, g, n = self.page, self.gutter, self.thumbs
+        w, h = p.imageable_w, p.imageable_h
+        if self.side:
+            hw = (w - g) * self.hero_share
+            tw, th = max(1.0, w - g - hw), max(1.0, (h - g * (n - 1)) / n)
+            return [Rect(p.left, p.top, hw, h)] + [Rect(p.left + hw + g, p.top + i * (th + g), tw, th) for i in range(n)]
+        hh = (h - g) * self.hero_share
+        th, tw = max(1.0, h - g - hh), max(1.0, (w - g * (n - 1)) / n)
+        return [Rect(p.left, p.top, w, hh)] + [Rect(p.left + i * (tw + g), p.top + hh + g, tw, th) for i in range(n)]
+
+    def slots(self, page: int):
+        start = page * self.per_page
+        return list(zip(self.images[start:start + self.per_page], self._rects()))
+
+
+@dataclass
+class Filmstrip(Strip):
+    """35 mm negative strips: black film with sprocket holes and 2:3 frames, several strips per page.
+
+    The strip height follows from the frame count; if it would not fit the page, the film is scaled down.
+    """
+    frames: int = 6
+    strip_w: float = 35 * MM
+
+    def __post_init__(self):
+        if self.frames < 1 or self.strip_w <= 0:
+            raise ValueError("frames and strip width must be positive")
+        h_max = self.page.imageable_h
+        for _ in range(2):   # the second pass applies the scale-down
+            fw = self.strip_w * 0.686                   # 24 of 35 mm
+            self.padding = (self.strip_w - fw) / 2
+            self.frame_gap = self.strip_w * 0.057       # 2 mm
+            self.strip_h = 2 * self.padding + self.frames * fw * 1.5 + (self.frames - 1) * self.frame_gap
+            if self.strip_h <= h_max * (1 + 1e-9):
+                break
+            self.strip_w *= h_max / self.strip_h
+        super().__post_init__()
+
+    def cut_guides(self, page: int):
+        return []   # the black film is its own outline
+
+    def shapes(self, page: int):
+        used = ceil_div(len(self.slots(page)), self.frames) if self.slots(page) else 0
+        w = self.strip_w
+        hole_w, hole_h, pitch, edge = w * 0.06, w * 0.08, w * 0.136, w * 0.05
+        out: list = []
+        for n in range(used):
+            x, y = self._strip_xy(n)
+            out.append(("rect", Rect(x, y, w, self.strip_h), (22, 22, 22)))
+            yy = y + pitch / 2
+            while yy + hole_h <= y + self.strip_h - pitch / 4 + 1e-9:
+                out.append(("round", Rect(x + edge, yy, hole_w, hole_h), (255, 255, 255)))
+                out.append(("round", Rect(x + w - edge - hole_w, yy, hole_w, hole_h), (255, 255, 255)))
+                yy += pitch
+        return out

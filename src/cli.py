@@ -5,8 +5,8 @@ import argparse
 import sys
 
 from .core.geometry import PageExtent
-from .core.layouts import (MM, RECIPES, Carousel, Collage, FixedSize, ImageItem, Mosaic, NUp, Package, Passport, Polaroid, Poster,
-                           Single, Strip, Triptych)
+from .core.layouts import (MM, RECIPES, Badges, Carousel, Collage, Feature, Filmstrip, FixedSize, FramedPrint, ImageItem,
+                           Mosaic, NUp, Package, Passport, Polaroid, Poster, Single, Strip, Triptych)
 from .core.render import render_all
 
 PAGES = {"a4": (595, 842), "letter": (612, 792), "a5": (420, 595), "4x6": (288, 432), "5x7": (360, 504),
@@ -38,8 +38,17 @@ def build(args) -> NUp | Single | Poster:
                       marks=args.marks)
     elif args.layout == "collage":
         lay = Collage(page=page)
+    elif args.layout == "framed":
+        lay = FramedPrint(page=page, mat=args.mat, color=args.mat_color, caption=args.caption)
+    elif args.layout == "badges":
+        lay = Badges(page=page, diameter=args.diameter * MM, gutter=args.gutter, staggered=not args.square,
+                     marks=args.marks)
+    elif args.layout == "feature":
+        lay = Feature(page=page, thumbs=args.thumbs, side=args.side, hero_share=args.hero_share, gutter=args.gutter)
+    elif args.layout == "filmstrip":
+        lay = Filmstrip(page=page, frames=args.frames or 6, strip_w=(args.strip_w or 35) * MM)
     elif args.layout == "strip":
-        lay = Strip(page=page, frames=args.frames, strip_w=args.strip_w * MM, strip_h=args.strip_h * MM)
+        lay = Strip(page=page, frames=args.frames or 4, strip_w=(args.strip_w or 51) * MM, strip_h=args.strip_h * MM)
     elif args.layout == "mosaic":
         lay = Mosaic(page=page, row_height=args.row_height * MM)
     elif args.layout == "carousel":
@@ -70,7 +79,7 @@ def main(argv=None) -> int:
     ap.add_argument("images", nargs="+")
     ap.add_argument("-o", "--out", required=True, help=".pdf (multipage) or .png (page number appended)")
     ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic", "strip", "passport", "polaroid", "triptych", "package",
-                                                       "collage"], default="nup")
+                                                       "collage", "framed", "badges", "feature", "filmstrip"], default="nup")
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--cols", type=int, default=2)
     ap.add_argument("--segments", type=int, default=4)
@@ -80,13 +89,20 @@ def main(argv=None) -> int:
     ap.add_argument("--caption", choices=["none", "filename", "number", "both"], default="none",
                     help="nup: contact-sheet caption under each photo")
     ap.add_argument("--marks", action="store_true", help="nup/fixed: crop marks at photo corners")
-    ap.add_argument("--frames", type=int, default=4, help="strip: photos per strip")
-    ap.add_argument("--strip-w", type=float, default=51, help="strip width, mm")
+    ap.add_argument("--frames", type=int, help="strip / filmstrip: photos per strip (default 4 / 6)")
+    ap.add_argument("--strip-w", type=float, help="strip / filmstrip width, mm (default 51 / 35)")
     ap.add_argument("--strip-h", type=float, default=152, help="strip height, mm")
     ap.add_argument("--border", type=float, default=10, help="polaroid: border width, points")
     ap.add_argument("--panels", type=int, default=3, help="triptych: number of panels")
     ap.add_argument("--vertical", action="store_true", help="triptych: stack the panels top to bottom")
     ap.add_argument("--recipe", choices=list(RECIPES), default="5x7-4wallets", help="package: which sheet to fill")
+    ap.add_argument("--mat", type=float, default=36, help="framed: mat width, points")
+    ap.add_argument("--mat-color", choices=["white", "black", "cream"], default="white", help="framed: mat colour")
+    ap.add_argument("--diameter", type=float, default=38, help="badges: diameter, mm (25, 32, 38, 44, 58, 75 are common)")
+    ap.add_argument("--square", action="store_true", help="badges: square grid instead of staggered rows")
+    ap.add_argument("--thumbs", type=int, default=4, help="feature: number of small photos next to the hero")
+    ap.add_argument("--side", action="store_true", help="feature: small photos in a column beside the hero")
+    ap.add_argument("--hero-share", type=float, default=0.7, help="feature: hero's share of the page, 0.2 to 0.9")
     ap.add_argument("--landscape", action="store_true", help="turn the paper sideways (e.g. 4x6 for 4 x 2 photos)")
     ap.add_argument("--copies", type=int, default=0, help="passport: copies of each photo, 0 = fill the sheet")
     ap.add_argument("--gutter", type=float, default=4, help="gap between photos / panels / prints, points")

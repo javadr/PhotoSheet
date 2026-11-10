@@ -15,18 +15,21 @@ from PySide6.QtWidgets import (
 
 from ..core import preset
 from ..core.geometry import PageExtent, Rect, crop_overflow
-from ..core.layouts import (MM, RECIPES, Carousel, Collage, FixedSize, ImageItem, Mosaic, NUp, Package, Passport,
-                            Polaroid, Poster, Single, Strip, Triptych, aspect, snap_delta)
+from ..core.layouts import (MM, RECIPES, Badges, Carousel, Collage, Feature, Filmstrip, FixedSize, FramedPrint,
+                            ImageItem, Mosaic, NUp, Package, Passport, Polaroid, Poster, Single, Strip, Triptych,
+                            aspect, snap_delta)
 from ..core.render import render_page
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
          "4 × 6 in": (288, 432), "5 × 7 in": (360, 504), "8 × 10 in": (576, 720)}   # portrait points; Orientation turns them
 KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
          "Fixed size": FixedSize, "Passport": Passport, "Mosaic": Mosaic, "Photo strip": Strip, "Polaroid": Polaroid,
-         "Triptych": Triptych, "Package": Package, "Collage": Collage}
+         "Triptych": Triptych, "Package": Package, "Collage": Collage, "Framed print": FramedPrint,
+         "Badges": Badges, "Feature": Feature, "Film strip": Filmstrip}
 KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "carousel",
         "Fixed size": "fixed", "Passport": "passport", "Mosaic": "mosaic", "Photo strip": "strip", "Polaroid": "polaroid",
-        "Triptych": "triptych", "Package": "package", "Collage": "collage"}
+        "Triptych": "triptych", "Package": "package", "Collage": "collage", "Framed print": "framed",
+        "Badges": "badges", "Feature": "feature", "Film strip": "filmstrip"}
 HANDLE = 5   # half the size of a Collage resize handle, in px
 SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
                 "Wallet 2.5 × 3.5 in": (63.5, 88.9), "4 × 6 in": (101.6, 152.4),
@@ -339,6 +342,16 @@ class MainWindow(QMainWindow):
                              "Hold Ctrl while dragging to turn snapping off for that drag.")
         self.arrange_btn = QPushButton("Auto-arrange")
         self.arrange_btn.clicked.connect(self._auto_arrange)
+        self.mat = self._spin(0, 200, 36)
+        self.mat_color = QComboBox()
+        self.mat_color.addItems(["White", "Black", "Cream"])
+        self.diameter = self._dspin(10, 200, 38)
+        self.diameter.setToolTip("Common pin-back badge graphics: 25, 32, 38, 44, 58 and 75 mm.")
+        self.staggered = QCheckBox("Staggered rows")
+        self.staggered.setChecked(True)
+        self.thumbs = self._spin(1, 12, 4)
+        self.side = QCheckBox("Small photos on the side")
+        self.hero_share = self._spin(20, 90, 70)
         self.collage_hint = QLabel("Drag a photo to move it, drag a corner\nto resize (Shift = free shape).")
         self.strip_w, self.strip_h = self._dspin(20, 400, 51), self._dspin(40, 600, 152)
         self.crop = QCheckBox("Crop all images to fill")
@@ -349,19 +362,23 @@ class MainWindow(QMainWindow):
         for key, label, w in [
             ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Orientation", self.orient), ("all", "Margin (pt)", self.margin),
             ("nup,polaroid", "Rows", self.rows), ("nup,polaroid", "Columns", self.cols),
-            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package", "Gutter (pt)", self.gutter),
-            ("nup,polaroid", "Captions", self.caption), ("nup,fixed,passport,polaroid,package", "", self.marks),
+            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,feature", "Gutter (pt)", self.gutter),
+            ("nup,polaroid,framed", "Captions", self.caption),
+            ("nup,fixed,passport,polaroid,package,badges", "", self.marks),
             ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
             ("fixed,passport", "Print size", self.size_preset), ("fixed,passport", "Width (mm)", self.cell_w),
             ("fixed,passport", "Height (mm)", self.cell_h), ("passport", "Copies per photo", self.copies),
-            ("fixed,passport,package", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
-            ("strip", "Frames per strip", self.frames), ("strip", "Strip width (mm)", self.strip_w),
+            ("fixed,passport,package,badges", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
+            ("strip,filmstrip", "Frames per strip", self.frames), ("strip,filmstrip", "Strip width (mm)", self.strip_w),
             ("strip", "Strip height (mm)", self.strip_h),
             ("polaroid", "Border (pt)", self.border), ("triptych", "Panels", self.panels),
             ("triptych", "", self.vertical), ("package", "Sheet", self.recipe),
             ("collage", "", self.snap), ("collage", "", self.arrange_btn), ("collage", "", self.collage_hint),
+            ("framed", "Mat width (pt)", self.mat), ("framed", "Mat colour", self.mat_color),
+            ("badges", "Diameter (mm)", self.diameter), ("badges", "", self.staggered),
+            ("feature", "Small photos", self.thumbs), ("feature", "", self.side), ("feature", "Hero size (%)", self.hero_share),
             ("all", "", self.crop),
         ]:
             form.addRow(label, w)
@@ -483,6 +500,16 @@ class MainWindow(QMainWindow):
                 sp.blockSignals(True)
                 sp.setValue(v)
                 sp.blockSignals(False)
+        if kind == "Film strip" and self._last_kind != "Film strip":        # 35 mm film: 6 frames on 35 mm
+            for sp, v in ((self.strip_w, 35.0), (self.frames, 6)):
+                sp.blockSignals(True)
+                sp.setValue(v)
+                sp.blockSignals(False)
+        elif kind == "Photo strip" and self._last_kind == "Film strip":     # back to booth strips
+            for sp, v in ((self.strip_w, 51.0), (self.frames, 4)):
+                sp.blockSignals(True)
+                sp.setValue(v)
+                sp.blockSignals(False)
         self._last_kind = kind
         m = self.margin.value()
         if not page.set_margins(m, m, m, m):
@@ -516,6 +543,17 @@ class MainWindow(QMainWindow):
                       marks=self.marks.isChecked())
         elif cls is Collage:
             kw = dict(snap=self.snap.isChecked())
+        elif cls is FramedPrint:
+            kw = dict(mat=self.mat.value(), color=self.mat_color.currentText().lower(),
+                      caption=self.caption.currentText().lower())
+        elif cls is Badges:
+            kw = dict(diameter=self.diameter.value() * MM, gutter=self.gutter.value(),
+                      staggered=self.staggered.isChecked(), marks=self.marks.isChecked())
+        elif cls is Feature:
+            kw = dict(thumbs=self.thumbs.value(), side=self.side.isChecked(),
+                      hero_share=self.hero_share.value() / 100, gutter=self.gutter.value())
+        elif cls is Filmstrip:
+            kw = dict(frames=self.frames.value(), strip_w=self.strip_w.value() * MM, gutter=self.gutter.value())
         self.layout_ = cls(page=page, **kw)
         for it in old.images:
             it.crop = self.crop.isChecked()
@@ -544,6 +582,8 @@ class MainWindow(QMainWindow):
             total = sum(int(n) for _, _, n in lay.prints)
             self.per_sheet.setText(f"{total} prints, all fit" if not lay.missing
                                    else f"{lay.missing} of {total} do not fit: use bigger paper")
+        elif isinstance(lay, Badges):
+            self.per_sheet.setText(f"{lay.per_page} badges per page" if lay.per_page else "too big for the page")
         else:
             self.per_sheet.setText("")
 
@@ -562,6 +602,7 @@ class MainWindow(QMainWindow):
         self.margin.setValue(int(lay.page.left))
         for attr, w in [("rows", self.rows), ("cols", self.cols), ("hgutter", self.gutter),
                         ("gutter", self.gutter), ("gap", self.gutter), ("panels", self.panels), ("border", self.border),
+                        ("mat", self.mat), ("thumbs", self.thumbs),
                         ("frames", self.frames), ("segments", self.segments), ("overlap", self.overlap),
                         ("angle_offset", self.angle), ("inner_radius", self.inner)]:
             if hasattr(lay, attr):
@@ -590,6 +631,14 @@ class MainWindow(QMainWindow):
                 self.recipe.setCurrentIndex(keys[0])
         if isinstance(lay, Collage):
             self.snap.setChecked(lay.snap)
+        if isinstance(lay, FramedPrint):
+            self.mat_color.setCurrentText(lay.color.capitalize())
+        if isinstance(lay, Badges):
+            self.diameter.setValue(lay.diameter / MM)
+            self.staggered.setChecked(lay.staggered)
+        if isinstance(lay, Feature):
+            self.side.setChecked(lay.side)
+            self.hero_share.setValue(round(lay.hero_share * 100))
         if hasattr(lay, "caption"):
             self.caption.setCurrentText(lay.caption.capitalize())
         self.marks.setChecked(lay.marks)

@@ -24,6 +24,10 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 | **Triptych** | One photo split into 2 to 12 panels with a gap between them, side by side or stacked, on one page. |
 | **Package** | Studio sheets that mix print sizes, such as one 5 × 7 plus four wallets on an 8 × 10. Prints are packed to use the sheet well. |
 | **Collage** | Free-form: move and resize each photo with the mouse, with snapping guides, handles and bring-to-front. |
+| **Framed print** | One photo per page on a wide white, black or cream mat, with a thin line around the picture and an optional caption. |
+| **Badges** | Round photos for button badges, stickers or coasters (25 to 75 mm), staggered to fit more, with optional cut circles. |
+| **Feature** | One large hero photo with a row or column of smaller photos, repeated page after page. |
+| **Film strip** | 35 mm negative-style strips: black film with sprocket holes and 2:3 frames, several strips per page. |
 
 **Working with the page**
 
@@ -78,6 +82,12 @@ photosheet-cli photos/*.jpg -o strips.pdf --layout strip --frames 4
 
 # A studio 8 x 10 sheet: one 5 x 7 and four wallets of each photo
 photosheet-cli me.jpg -o package.pdf --layout package --page 8x10 --recipe 5x7-4wallets
+
+# 32 mm badge graphics, staggered, with cut circles
+photosheet-cli photos/*.jpg -o badges.pdf --layout badges --diameter 32 --marks
+
+# Negative-strip look, 6 frames per strip
+photosheet-cli photos/*.jpg -o film.pdf --layout filmstrip --frames 6
 
 # Instant-photo prints, 2 x 3 per page, numbered
 photosheet-cli photos/*.jpg -o polaroid.pdf --layout polaroid --rows 3 --cols 2 --caption number

@@ -258,3 +258,72 @@ def test_banner_does_not_crash_when_there_is_no_stdout(monkeypatch):
     from photosheet.banner import print_banner
     monkeypatch.setattr(sys, "stdout", None)     # what a windowed Windows executable has
     print_banner()                                # must simply do nothing
+
+
+def test_badges_are_cropped_to_circles_with_cut_rings(red):
+    from photosheet.core.layouts import Badges
+    pg = PageExtent(300, 300)
+    pg.set_margins(10, 10, 10, 10)
+    b = Badges(page=pg, diameter=100, gutter=10, staggered=False, marks=True)
+    b.add(ImageItem(red))
+    im = render_page(b, 0, dpi=72)
+    (_, r), = b.slots(0)[:1]
+    cx, cy = int(r.x + r.w / 2), int(r.y + r.h / 2)
+    assert im.getpixel((cx, cy)) == (255, 0, 0)                                                     # photo in the middle
+    assert im.getpixel((int(r.x + 2), int(r.y + 2))) == (255, 255, 255)                            # square corner cut away
+    assert im.getpixel((int(r.x + 2), cy)) != (255, 255, 255)                                       # but the circle's edge is inside
+    import math
+    ring = [im.getpixel((int(cx + 50 * math.cos(a / 10)), int(cy + 50 * math.sin(a / 10)))) for a in range(63)]
+    assert any(p != (255, 0, 0) and p != (255, 255, 255) for p in ring)                            # the grey cut ring is drawn
+
+
+def test_framed_print_feature_and_filmstrip_render(red, tmp_path):
+    from photosheet.core.layouts import Feature, Filmstrip, FramedPrint
+    blue = tmp_path / "blue.png"
+    Image.new("RGB", (200, 100), (0, 0, 255)).save(blue)
+    fpg = PageExtent(300, 400)
+    fpg.set_margins(15, 15, 15, 15)
+    f = FramedPrint(page=fpg, mat=50, color="black", caption="number")
+    f.add(ImageItem(red, rotation=0))
+    im = render_page(f, 0, dpi=72)
+    (_, ph), = f.slots(0)
+    assert im.getpixel((int(ph.x + ph.w / 2), int(ph.y + ph.h / 2))) == (255, 0, 0)               # the photo
+    assert im.getpixel((int(f._card().x + 20), int(f._card().y + 20))) == (20, 20, 20)             # black mat
+    assert im.getpixel((5, 5)) == (255, 255, 255)                                                   # page margin is paper
+    ft = Feature(page=PageExtent(300, 400), thumbs=2, hero_share=0.6, gutter=6)
+    ft.add(ImageItem(red, crop=True, rotation=0))
+    ft.add(ImageItem(str(blue), crop=True, rotation=0))
+    out = render_page(ft, 0, dpi=72)
+    hero, thumb = ft.slots(0)[0][1], ft.slots(0)[1][1]
+    assert out.getpixel((int(hero.x + hero.w / 2), int(hero.y + hero.h / 2))) == (255, 0, 0)
+    assert out.getpixel((int(thumb.x + thumb.w / 2), int(thumb.y + thumb.h / 2))) == (0, 0, 255)
+    pg = PageExtent(400, 500)
+    pg.set_margins(10, 10, 10, 10)
+    fs = Filmstrip(page=pg, frames=3)
+    fs.add(ImageItem(red, crop=True, rotation=0))
+    film = render_page(fs, 0, dpi=72)
+    strip = next(r for k, r, _ in fs.shapes(0) if k == "rect")
+    hole = next(r for k, r, _ in fs.shapes(0) if k == "round")
+    (_, fr), = fs.slots(0)[:1]
+    assert film.getpixel((int(strip.x + 1), int(strip.y + strip.h / 2))) == (22, 22, 22)           # black film
+    assert film.getpixel((int(hole.x + hole.w / 2), int(hole.y + hole.h / 2))) == (255, 255, 255)  # sprocket hole shows paper
+    assert film.getpixel((int(fr.x + fr.w / 2), int(fr.y + fr.h / 2))) == (255, 0, 0)              # the frame
+
+
+def test_cli_and_presets_for_the_last_four_layouts(red, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import Badges, Feature, Filmstrip, FramedPrint
+    for args in (["--layout", "framed", "--mat-color", "cream", "--caption", "filename"],
+                 ["--layout", "badges", "--diameter", "32", "--marks"], ["--layout", "badges", "--square"],
+                 ["--layout", "feature", "--thumbs", "2", "--side"], ["--layout", "filmstrip"],
+                 ["--layout", "filmstrip", "--frames", "4", "--strip-w", "30"], ["--layout", "strip"]):
+        out = tmp_path / "o.pdf"
+        assert cli.main([red, red, red, "-o", str(out), "--dpi", "40", *args]) == 0 and out.stat().st_size > 0
+    for lay in (FramedPrint(page=PageExtent(300, 300), mat=20, color="black", caption="number"),
+                Badges(page=PageExtent(300, 300), diameter=90, staggered=False, marks=True),
+                Feature(page=PageExtent(300, 300), thumbs=5, side=True, hero_share=0.5),
+                Filmstrip(page=PageExtent(595, 842), frames=8)):
+        f = str(tmp_path / "p.json")
+        preset.save(lay, f)
+        back = preset.load(f)
+        assert type(back) is type(lay) and back == lay

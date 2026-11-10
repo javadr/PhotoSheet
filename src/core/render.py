@@ -8,7 +8,7 @@ from collections import OrderedDict
 
 from dataclasses import replace
 
-from PIL import Image, ImageCms, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageCms, ImageChops, ImageDraw, ImageFont, ImageOps
 
 from .effects import apply_effects
 from .geometry import Rect, Rotation, fit
@@ -90,7 +90,7 @@ def _load(item: ImageItem, printer_profile: str | None = None) -> Image.Image:
 
 
 def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s: float,
-           fast: bool = False) -> None:
+           fast: bool = False, ellipse: bool = False) -> None:
     f = fit(im.width, im.height, slot.scaled(s), item.crop, Rotation(item.rotation), item.hpan, item.vpan)
     if f.rotation:
         im = im.rotate(-f.rotation, expand=True)  # PIL rotates counter-clockwise
@@ -103,14 +103,37 @@ def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s:
     if item.mask:
         m = ImageOps.invert(Image.open(item.mask).convert("L").resize(im.size))
         im.putalpha(m)  # mask: white = hide, as the original inverted it
+    if ellipse:   # round badge: keep only the circle (drawn 4x larger, then shrunk, for a smooth edge)
+        w, h = im.size
+        m = Image.new("L", (w * 4, h * 4), 0)
+        ImageDraw.Draw(m).ellipse((0, 0, w * 4 - 1, h * 4 - 1), fill=255)
+        m = m.resize((w, h), Image.LANCZOS)
+        if im.mode == "RGBA":
+            m = ImageChops.multiply(m, im.getchannel("A"))
+        im = im.convert("RGB")
+        im.putalpha(m)
     canvas.paste(im, (f.xpos, f.ypos), im if im.mode == "RGBA" else None)
 
 
-def _caption(draw: ImageDraw.ImageDraw, text: str, band: Rect, s: float) -> None:
+def _caption(draw: ImageDraw.ImageDraw, text: str, band: Rect, s: float, color=(70, 70, 70)) -> None:
     font = ImageFont.load_default(size=max(6, round(band.h / 1.8 * s)))
     while len(text) > 1 and font.getlength(text) > band.w * s:  # shorten with an ellipsis to fit the cell
         text = text[:-2].rstrip() + "…"
-    draw.text(((band.x + band.w / 2) * s, (band.y + band.h / 2) * s), text, fill=(70, 70, 70), font=font, anchor="mm")
+    draw.text(((band.x + band.w / 2) * s, (band.y + band.h / 2) * s), text, fill=color, font=font, anchor="mm")
+
+
+def _draw_shape(draw: ImageDraw.ImageDraw, kind: str, r: Rect, rgb: tuple, s: float) -> None:
+    box = (r.x * s, r.y * s, (r.x + r.w) * s - 1, (r.y + r.h) * s - 1)
+    if kind == "card":
+        draw.rectangle(box, fill=rgb, outline=(205, 205, 205), width=max(1, round(0.5 * s)))
+    elif kind == "rect":
+        draw.rectangle(box, fill=rgb)
+    elif kind == "round":
+        draw.rounded_rectangle(box, radius=min(r.w, r.h) * 0.3 * s, fill=rgb)
+    elif kind == "ellipse":
+        draw.ellipse(box, fill=rgb)
+    elif kind == "frame":
+        draw.rectangle(box, outline=rgb, width=max(1, round(0.6 * s)))
 
 
 def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str | None = None,
@@ -152,15 +175,27 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
             canvas.paste(tmp, mask=mask)
         return canvas
     draw = ImageDraw.Draw(canvas)
-    for x0, y0, x1, y1 in layout.cut_guides(page):  # under the photos, so they never cover an image
-        draw.line((x0 * s, y0 * s, x1 * s, y1 * s), fill=(140, 140, 140), width=max(1, round(0.4 * s)))
+    round_photos = layout.shape == "ellipse"
+
+    def guides():
+        for x0, y0, x1, y1 in layout.cut_guides(page):
+            draw.line((x0 * s, y0 * s, x1 * s, y1 * s), fill=(140, 140, 140), width=max(1, round(0.4 * s)))
+
+    if not round_photos:
+        guides()   # under the photos, so they never cover an image
+    for kind, rect, rgb in layout.shapes(page):
+        _draw_shape(draw, kind, rect, rgb, s)
     for card in layout.cards(page):   # white cards sit under the photos
         draw.rectangle((card.x * s, card.y * s, (card.x + card.w) * s - 1, (card.y + card.h) * s - 1),
                        fill=(255, 255, 255), outline=(205, 205, 205), width=max(1, round(0.5 * s)))
     for item, slot in layout.slots(page):
-        _place(canvas, item, load(item, printer_profile, fast), slot, s, fast)
+        if round_photos:
+            item = replace(item, crop=True)   # a circle is always filled
+        _place(canvas, item, load(item, printer_profile, fast), slot, s, fast, ellipse=round_photos)
+    if round_photos:
+        guides()   # a cut circle must show on top of the photo's edge
     for text, band in layout.captions(page):
-        _caption(draw, text, band, s)
+        _caption(draw, text, band, s, layout.caption_color)
     return canvas
 
 
