@@ -28,6 +28,10 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 | **Badges** | Round photos for button badges, stickers or coasters (25 to 75 mm), staggered to fit more, with optional cut circles. |
 | **Feature** | One large hero photo with a row or column of smaller photos, repeated page after page. |
 | **Film strip** | 35 mm negative-style strips: black film with sprocket holes and 2:3 frames, several strips per page, vertical or horizontal (Direction setting). |
+| **Bento** | Asymmetric tile grids that fill the page (hero-left, hero-top, wide, pinwheel, magazine, six tiles). |
+| **Golden spiral** | Photos in a spiral, each taking about 62% of the space that is left. |
+| **Honeycomb** | Hexagon-shaped photos nested like a honeycomb, with optional cut lines. |
+| **Calendar** | A wall calendar: a photo above a month grid, one page per month, weekends in red. |
 
 **Working with the page**
 
@@ -82,6 +86,9 @@ photosheet-cli photos/*.jpg -o strips.pdf --layout strip --frames 4
 
 # A studio 8 x 10 sheet: one 5 x 7 and four wallets of each photo
 photosheet-cli me.jpg -o package.pdf --layout package --page 8x10 --recipe 5x7-4wallets
+
+# A 12-month wall calendar for 2027, one photo per month
+photosheet-cli photos/*.jpg -o calendar.pdf --layout calendar --year 2027 --crop
 
 # 32 mm badge graphics, staggered, with cut circles
 photosheet-cli photos/*.jpg -o badges.pdf --layout badges --diameter 32 --marks

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import sys
 
 from .core.geometry import PageExtent
-from .core.layouts import (MM, RECIPES, Badges, Carousel, Collage, Feature, Filmstrip, FixedSize, FramedPrint, ImageItem,
-                           Mosaic, NUp, Package, Passport, Polaroid, Poster, Single, Strip, Triptych)
+from .core.layouts import (BENTO, MM, RECIPES, Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip, FixedSize,
+                           FramedPrint, Honeycomb, ImageItem, Mosaic, NUp, Package, Passport, Polaroid, Poster,
+                           Single, Spiral, Strip, Triptych)
 from .core.render import render_all
 
 PAGES = {"a4": (595, 842), "letter": (612, 792), "a5": (420, 595), "4x6": (288, 432), "5x7": (360, 504),
@@ -47,6 +49,15 @@ def build(args) -> NUp | Single | Poster:
         lay = Feature(page=page, thumbs=args.thumbs, side=args.side, hero_share=args.hero_share, gutter=args.gutter)
     elif args.layout == "filmstrip":
         lay = Filmstrip(page=page, frames=args.frames or 6, strip_w=(args.strip_w or 35) * MM, direction=args.direction)
+    elif args.layout == "bento":
+        lay = Bento(page=page, template=args.template, gutter=args.gutter)
+    elif args.layout == "spiral":
+        lay = Spiral(page=page, photos=args.spiral_photos, share=args.share, clockwise=not args.ccw, gutter=args.gutter)
+    elif args.layout == "honeycomb":
+        lay = Honeycomb(page=page, size=args.hex_size * MM, gutter=args.gutter, marks=args.marks)
+    elif args.layout == "calendar":
+        lay = Calendar(page=page, year=args.year, month=args.month, months=args.months, week_start=args.week_start,
+                       photo_share=args.photo_share, gutter=args.gutter)
     elif args.layout == "strip":
         lay = Strip(page=page, frames=args.frames or 4, strip_w=(args.strip_w or 51) * MM, strip_h=args.strip_h * MM,
                     direction=args.direction)
@@ -80,7 +91,8 @@ def main(argv=None) -> int:
     ap.add_argument("images", nargs="+")
     ap.add_argument("-o", "--out", required=True, help=".pdf (multipage) or .png (page number appended)")
     ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic", "strip", "passport", "polaroid", "triptych", "package",
-                                                       "collage", "framed", "badges", "feature", "filmstrip"], default="nup")
+                                                       "collage", "framed", "badges", "feature", "filmstrip", "bento", "spiral",
+                                                       "honeycomb", "calendar"], default="nup")
     ap.add_argument("--rows", type=int, default=2)
     ap.add_argument("--cols", type=int, default=2)
     ap.add_argument("--segments", type=int, default=4)
@@ -106,6 +118,16 @@ def main(argv=None) -> int:
     ap.add_argument("--thumbs", type=int, default=4, help="feature: number of small photos next to the hero")
     ap.add_argument("--side", action="store_true", help="feature: small photos in a column beside the hero")
     ap.add_argument("--hero-share", type=float, default=0.7, help="feature: hero's share of the page, 0.2 to 0.9")
+    ap.add_argument("--template", choices=list(BENTO), default="hero-left", help="bento: which tile arrangement")
+    ap.add_argument("--spiral-photos", type=int, default=5, help="spiral: photos per page")
+    ap.add_argument("--share", type=float, default=0.618, help="spiral: share each photo takes of what is left")
+    ap.add_argument("--ccw", action="store_true", help="spiral: turn counter-clockwise")
+    ap.add_argument("--hex-size", type=float, default=40, help="honeycomb: cell width across the flats, mm")
+    ap.add_argument("--year", type=int, default=datetime.date.today().year, help="calendar: year")
+    ap.add_argument("--month", type=int, default=1, help="calendar: first month (1-12)")
+    ap.add_argument("--months", type=int, default=12, help="calendar: how many months (pages)")
+    ap.add_argument("--week-start", choices=["monday", "sunday"], default="monday", help="calendar: first weekday")
+    ap.add_argument("--photo-share", type=float, default=0.55, help="calendar: the photo's share of the page height")
     ap.add_argument("--landscape", action="store_true", help="turn the paper sideways (e.g. 4x6 for 4 x 2 photos)")
     ap.add_argument("--copies", type=int, default=0, help="passport: copies of each photo, 0 = fill the sheet")
     ap.add_argument("--gutter", type=float, default=4, help="gap between photos / panels / prints, points")

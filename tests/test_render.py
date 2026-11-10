@@ -352,3 +352,72 @@ def test_horizontal_strips_render_wide_black_film_and_frames_in_a_row(red):
                  ["--layout", "strip", "--direction", "horizontal"]):
         pdf = red + ".pdf"
         assert cli.main([red, red, "-o", pdf, "--dpi", "40", *args]) == 0
+
+
+def test_honeycomb_photos_are_hexagons_and_calendar_draws_text_and_grid(red):
+    from photosheet.core.layouts import Calendar, Honeycomb
+    pg = PageExtent(300, 300)
+    pg.set_margins(10, 10, 10, 10)
+    h = Honeycomb(page=pg, size=100, gutter=10, marks=True)
+    h.add(ImageItem(red))
+    im = render_page(h, 0, dpi=72)
+    (_, r), = h.slots(0)[:1]
+    cx, cy = int(r.x + r.w / 2), int(r.y + r.h / 2)
+    assert im.getpixel((cx, cy)) == (255, 0, 0)                                       # photo in the middle
+    assert im.getpixel((int(r.x + 3), int(r.y + 3))) == (255, 255, 255)                # the box's corner is cut off
+    assert im.getpixel((int(r.x + r.w - 3), int(r.y + r.h / 2))) != (255, 255, 255)    # but the flat side is filled
+    assert im.getpixel((cx, int(r.y + 4))) != (255, 255, 255)                          # and so is the top point
+    pgc = PageExtent(500, 700)
+    pgc.set_margins(20, 20, 20, 20)
+    cal = Calendar(page=pgc, year=2024, month=2, photo_share=0.5)
+    cal.add(ImageItem(red, crop=True, rotation=0))
+    out = render_page(cal, 0, dpi=72)
+    photo = cal.slots(0)[0][1]
+    assert out.getpixel((int(photo.x + photo.w / 2), int(photo.y + photo.h / 2))) == (255, 0, 0)
+    title = cal.captions(0)[0][1]
+    ink = lambda box: out.crop(tuple(int(v) for v in box)).getextrema()
+    assert ink((title.x, title.y, title.x + title.w, title.y + title.h))[0][0] < 100   # month title drawn in dark ink
+    _, _, _, weeks, top, cw, ch = cal._geometry(0)
+    sat = next(r for t, r, col in cal.captions(0) if t == "Sat")
+    sat_ink = out.crop((int(sat.x), int(sat.y), int(sat.x + sat.w), int(sat.y + sat.h))).getextrema()
+    assert sat_ink[0][0] > 150 and sat_ink[1][0] < 120                                  # weekend names are red (bright R, dark G)
+    assert out.getpixel((int(pgc.left + 3 * cw), int(top + 2 * ch))) != (255, 255, 255)   # a grid line crosses here
+
+
+def test_cli_for_bento_spiral_honeycomb_and_calendar_and_presets(red, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import Bento, Calendar, Honeycomb, Spiral
+    for args in (["--layout", "bento", "--template", "pinwheel"], ["--layout", "bento"],
+                 ["--layout", "spiral", "--spiral-photos", "4", "--ccw"], ["--layout", "honeycomb", "--hex-size", "30", "--marks"],
+                 ["--layout", "calendar", "--year", "2027", "--month", "11", "--months", "3", "--week-start", "sunday"]):
+        out = tmp_path / "o.pdf"
+        assert cli.main([red, red, red, "-o", str(out), "--dpi", "40", *args]) == 0 and out.stat().st_size > 0
+    for lay in (Bento(page=PageExtent(300, 300), template="magazine", gutter=3),
+                Spiral(page=PageExtent(300, 300), photos=7, share=0.55, clockwise=False),
+                Honeycomb(page=PageExtent(300, 300), size=70, marks=True),
+                Calendar(page=PageExtent(595, 842), year=2030, month=6, months=7, week_start="sunday", photo_share=0.4)):
+        f = str(tmp_path / "p.json")
+        preset.save(lay, f)
+        back = preset.load(f)
+        assert type(back) is type(lay) and back == lay
+
+
+def test_captions_can_draw_accented_letters_and_calendar_names_ignore_the_system_language(monkeypatch):
+    import calendar
+
+    from photosheet.core import render
+    from photosheet.core.layouts import Calendar, PageExtent as PE
+    font = render.caption_font(24)
+    if getattr(font, "path", None) is None:
+        import pytest as _pytest
+        _pytest.skip("no TrueType font installed here; Pillow's built-in font cannot draw accents")
+    box = bytes(font.getmask("͸"))                                    # an unassigned code point draws the 'missing' box
+    for ch in "äöüéñçßÅ":
+        assert bytes(font.getmask(ch)) != box, ch                          # a real glyph, not the box
+    german = [""] + ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober",
+                     "November", "Dezember"]
+    monkeypatch.setattr(calendar, "month_name", german)                    # what a German desktop reports
+    monkeypatch.setattr(calendar, "day_abbr", ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"])
+    cal = Calendar(page=PE(595, 842), year=2027, month=3, months=1)
+    caps = cal.captions(0)
+    assert caps[0][0] == "March 2027" and [t for t, _, _ in caps[1:8]] == ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]

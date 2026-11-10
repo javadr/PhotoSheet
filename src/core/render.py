@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+from functools import lru_cache
 import os
 import threading
 from collections import OrderedDict
@@ -90,7 +91,7 @@ def _load(item: ImageItem, printer_profile: str | None = None) -> Image.Image:
 
 
 def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s: float,
-           fast: bool = False, ellipse: bool = False) -> None:
+           fast: bool = False, shape: str | None = None) -> None:
     f = fit(im.width, im.height, slot.scaled(s), item.crop, Rotation(item.rotation), item.hpan, item.vpan)
     if f.rotation:
         im = im.rotate(-f.rotation, expand=True)  # PIL rotates counter-clockwise
@@ -103,10 +104,14 @@ def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s:
     if item.mask:
         m = ImageOps.invert(Image.open(item.mask).convert("L").resize(im.size))
         im.putalpha(m)  # mask: white = hide, as the original inverted it
-    if ellipse:   # round badge: keep only the circle (drawn 4x larger, then shrunk, for a smooth edge)
+    if shape:   # keep only the circle / hexagon (drawn 4x larger, then shrunk, for a smooth edge)
         w, h = im.size
         m = Image.new("L", (w * 4, h * 4), 0)
-        ImageDraw.Draw(m).ellipse((0, 0, w * 4 - 1, h * 4 - 1), fill=255)
+        W, H = w * 4 - 1, h * 4 - 1
+        if shape == "hexagon":
+            ImageDraw.Draw(m).polygon([(W / 2, 0), (W, H / 4), (W, 3 * H / 4), (W / 2, H), (0, 3 * H / 4), (0, H / 4)], fill=255)
+        else:
+            ImageDraw.Draw(m).ellipse((0, 0, W, H), fill=255)
         m = m.resize((w, h), Image.LANCZOS)
         if im.mode == "RGBA":
             m = ImageChops.multiply(m, im.getchannel("A"))
@@ -115,8 +120,24 @@ def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s:
     canvas.paste(im, (f.xpos, f.ypos), im if im.mode == "RGBA" else None)
 
 
+# Pillow's built-in font has no accented letters (it draws "ä" as an empty box). Pillow finds these by file name in the
+# system font folders of Linux, macOS and Windows; the first one installed wins.
+FONT_NAMES = ("DejaVuSans.ttf", "NotoSans-Regular.ttf", "LiberationSans-Regular.ttf", "Arial.ttf", "arial.ttf",
+              "Helvetica.ttc", "SegoeUI.ttf")
+
+
+@lru_cache(maxsize=64)
+def caption_font(size: int):
+    for name in FONT_NAMES:
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    return ImageFont.load_default(size=size)   # last resort: ASCII only
+
+
 def _caption(draw: ImageDraw.ImageDraw, text: str, band: Rect, s: float, color=(70, 70, 70)) -> None:
-    font = ImageFont.load_default(size=max(6, round(band.h / 1.8 * s)))
+    font = caption_font(max(6, round(band.h / 1.8 * s)))
     while len(text) > 1 and font.getlength(text) > band.w * s:  # shorten with an ellipsis to fit the cell
         text = text[:-2].rstrip() + "…"
     draw.text(((band.x + band.w / 2) * s, (band.y + band.h / 2) * s), text, fill=color, font=font, anchor="mm")
@@ -175,7 +196,7 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
             canvas.paste(tmp, mask=mask)
         return canvas
     draw = ImageDraw.Draw(canvas)
-    round_photos = layout.shape == "ellipse"
+    round_photos = layout.shape in ("ellipse", "hexagon")
 
     def guides():
         for x0, y0, x1, y1 in layout.cut_guides(page):
@@ -191,11 +212,11 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
     for item, slot in layout.slots(page):
         if round_photos:
             item = replace(item, crop=True)   # a circle is always filled
-        _place(canvas, item, load(item, printer_profile, fast), slot, s, fast, ellipse=round_photos)
+        _place(canvas, item, load(item, printer_profile, fast), slot, s, fast, shape=layout.shape if round_photos else None)
     if round_photos:
         guides()   # a cut circle must show on top of the photo's edge
-    for text, band in layout.captions(page):
-        _caption(draw, text, band, s, layout.caption_color)
+    for text, band, *color in layout.captions(page):   # a layout may colour single captions (calendar weekends)
+        _caption(draw, text, band, s, color[0] if color else layout.caption_color)
     return canvas
 
 

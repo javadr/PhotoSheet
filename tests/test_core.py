@@ -465,3 +465,115 @@ def test_horizontal_filmstrip_has_landscape_frames_holes_in_the_film_and_fits_th
     assert long.strip_h <= pg.imageable_w * (1 + 1e-9) and long.strip_w < 35 * MM
     v = Filmstrip(page=pg, frames=6, direction="vertical")                        # forcing vertical on the same landscape page
     assert not v.horizontal and v.strip_h <= pg.imageable_h + 1e-6 and v.strip_w < 35 * MM
+
+
+# ---- Bento, Spiral, Honeycomb, Calendar ----
+
+def test_bento_templates_tile_the_page_exactly_with_the_biggest_tile_first():
+    from photosheet.core.layouts import BENTO, Bento
+    pg = PageExtent(400, 600)
+    for key, (label, cols, rows, cells) in BENTO.items():
+        grid = [(x, y) for c, r, cs, rs in cells for x in range(c, c + cs) for y in range(r, r + rs)]
+        assert len(grid) == len(set(grid)) == cols * rows, key                    # no gaps, no overlaps in the unit grid
+        assert cells[0][2] * cells[0][3] == max(cs * rs for _, _, cs, rs in cells), key   # tile 1 is (one of) the biggest
+        b = Bento(page=pg, template=key, gutter=0)
+        for i in range(b.per_page * 2 + 1):
+            b.add(ImageItem(f"{i}.jpg"))
+        rects = [r for _, r in b.slots(0)]
+        assert len(rects) == b.per_page and _rects_disjoint(rects), key
+        assert abs(sum(r.w * r.h for r in rects) - 400 * 600) < 1e-6, key          # zero gutter: covers the whole page
+        assert b.pages == 3 and len(b.slots(2)) == 1
+    g = Bento(page=pg, template="six-tiles", gutter=10)
+    for i in range(6):
+        g.add(ImageItem(f"{i}.jpg"))
+    gr = [r for _, r in g.slots(0)]
+    assert _rects_disjoint(gr) and all(r.x >= -1e-6 and r.x + r.w <= 400 + 1e-6 and r.y + r.h <= 600 + 1e-6 for r in gr)
+    for bad in (dict(template="nope"), dict(gutter=-1)):
+        with pytest.raises(ValueError):
+            Bento(**bad)
+
+
+def test_spiral_photos_shrink_turn_and_fill_the_page_in_both_directions():
+    from photosheet.core.layouts import Spiral
+    pg = PageExtent(600, 400)
+    cw = Spiral(page=pg, photos=5, gutter=4)
+    ccw = Spiral(page=pg, photos=5, gutter=4, clockwise=False)
+    for sp in (cw, ccw):
+        for i in range(7):
+            sp.add(ImageItem(f"{i}.jpg"))
+        rects = [r for _, r in sp.slots(0)]
+        assert len(rects) == 5 and _rects_disjoint(rects) and sp.pages == 2 and len(sp.slots(1)) == 2
+        areas = [r.w * r.h for r in rects]
+        assert areas[0] == max(areas) and areas[0] > areas[1] > areas[2]           # each is smaller than the one before
+        assert all(r.x >= -1e-6 and r.y >= -1e-6 and r.x + r.w <= 600 + 1e-6 and r.y + r.h <= 400 + 1e-6 for r in rects)
+        assert sum(areas) > 0.9 * 600 * 400                                          # the page is nearly full
+    a, b = [r for _, r in cw.slots(0)], [r for _, r in ccw.slots(0)]
+    assert a[1].y < b[1].y                                                           # clockwise goes up second, counter-clockwise down
+    assert abs(a[0].w - 600 * 0.618) < 1e-9
+    for bad in (dict(photos=1), dict(share=0.1), dict(share=0.9)):
+        with pytest.raises(ValueError):
+            Spiral(**bad)
+
+
+def test_honeycomb_cells_nest_without_touching_and_stay_on_the_page():
+    import math
+
+    from photosheet.core.layouts import MM, Honeycomb
+    pg = PageExtent(595, 842)
+    pg.set_margins(20, 20, 20, 20)
+    h = Honeycomb(page=pg, size=40 * MM, gutter=6)
+    assert h.shape == "hexagon" and h.per_page >= 24
+    for i in range(h.per_page + 2):
+        h.add(ImageItem(f"{i}.jpg"))
+    assert h.pages == 2 and len(h.slots(1)) == 2
+    cs = [(r.x + r.w / 2, r.y + r.h / 2) for _, r in h.slots(0)]
+    assert abs(h.cell_h - h.size * 2 / math.sqrt(3)) < 1e-9
+    assert all(20 - 1e-6 <= r.x and r.x + r.w <= 575 + 1e-6 and 20 - 1e-6 <= r.y and r.y + r.h <= 822 + 1e-6 for _, r in h.slots(0))
+    assert min(math.dist(a, c) for i, a in enumerate(cs) for c in cs[i + 1:]) >= h.size + 6 - 1e-6   # flat sides keep the gutter
+    h.marks = True
+    assert len(h.cut_guides(0)) == 6 * h.per_page
+    assert Honeycomb(page=pg, size=3000).per_page == 0 and Honeycomb(page=pg, size=3000).pages == 1
+    with pytest.raises(ValueError):
+        Honeycomb(size=0)
+
+
+def test_calendar_days_land_in_the_right_columns_and_weeks_start_where_asked():
+    from photosheet.core.layouts import Calendar
+    pg = PageExtent(595, 842)
+    pg.set_margins(20, 20, 20, 20)
+    c = Calendar(page=pg, year=2024, month=2, months=3)                              # Feb 2024: starts on a Thursday, 29 days
+    assert c.pages == 3 and [c.month_of(i) for i in range(3)] == [(2024, 2), (2024, 3), (2024, 4)]
+    caps = c.captions(0)
+    assert caps[0][0] == "February 2024"
+    assert [t for t, _, _ in caps[1:8]] == ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    days = {t: r for t, r, _ in caps[8:]}
+    assert sorted(int(d) for d in days) == list(range(1, 30))                          # exactly 29 days
+    head = {t: r for t, r, _ in caps[1:8]}
+    assert abs((days["1"].x + days["1"].w / 2) - (head["Thu"].x + head["Thu"].w / 2)) < 1e-6   # 1 Feb sits under Thu
+    assert abs((days["8"].x + days["8"].w / 2) - (days["1"].x + days["1"].w / 2)) < 1e-6      # the next Thursday is below it
+    assert days["8"].y > days["1"].y
+    colour = {t: col for t, _, col in caps}
+    assert colour["Sat"][0] > 150 and colour["Sun"][0] > 150 and colour["Mon"][0] < 120       # weekends are red
+    s = Calendar(page=pg, year=2024, month=2, week_start="sunday").captions(0)
+    assert [t for t, _, _ in s[1:8]] == ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    rolled = Calendar(page=pg, year=2026, month=11, months=4)
+    assert [rolled.month_of(i) for i in range(4)] == [(2026, 11), (2026, 12), (2027, 1), (2027, 2)]
+    assert len(c._geometry(0)[3]) == 5 and len(Calendar(page=pg, year=2026, month=8)._geometry(0)[3]) == 6   # 5 vs 6 week rows
+
+
+def test_calendar_cycles_photos_keeps_the_photo_above_the_grid_and_validates():
+    from photosheet.core.layouts import Calendar
+    pg = PageExtent(595, 842)
+    c = Calendar(page=pg, year=2025, month=1, months=12, photo_share=0.5)
+    assert c.slots(0) == [] and c.slots(5) == []                                       # no photos yet
+    for n in ("a.jpg", "b.jpg", "c.jpg"):
+        c.add(ImageItem(n))
+    assert [c.slots(i)[0][0].path for i in range(5)] == ["a.jpg", "b.jpg", "c.jpg", "a.jpg", "b.jpg"]   # repeats after 3
+    photo = c.slots(0)[0][1]
+    assert abs(photo.h - 842 * 0.5) < 1e-9 and photo.w == 595
+    assert min(r.y for _, r, _ in c.captions(0)) >= photo.y + photo.h                  # all text is below the photo
+    assert c.slots(12) == [] and c.captions(12) == [] and c.shapes(12) == []
+    assert len(c.shapes(0)) == 7 * len(c._geometry(0)[3])                              # one outlined cell per day slot
+    for bad in (dict(month=0), dict(month=13), dict(months=0), dict(months=25), dict(week_start="friday"), dict(photo_share=0.9)):
+        with pytest.raises(ValueError):
+            Calendar(**bad)

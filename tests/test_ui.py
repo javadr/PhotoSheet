@@ -902,3 +902,78 @@ def test_strip_direction_follows_the_page_by_default_and_the_selector_overrides_
     assert not w.direction.isVisible() or w.kind.currentText() in ("Photo strip", "Film strip")
     w.kind.setCurrentText("N-up")
     assert not w.direction.isVisible()
+
+
+# ---- Bento, Golden spiral, Honeycomb, Calendar ----
+
+def test_last_four_layouts_keep_photos_show_controls_and_roundtrip_presets(app, tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.layouts import MM, BENTO, Bento, Calendar, Honeycomb, Spiral
+    w = _win_with_images(tmp_path, 6)
+    w.show()
+    w.kind.setCurrentText("Bento")
+    assert isinstance(w.layout_, Bento) and len(w.layout_.images) == 6
+    assert w.bento.isVisible() and w.gutter.isVisible() and not w.spiral_n.isVisible() and not w.cal_year.isVisible()
+    w.bento.setCurrentIndex(list(BENTO).index("magazine"))
+    assert w.layout_.template == "magazine" and w.layout_.pages == 2 and len(w.layout_.slots(0)) == 5
+    w.kind.setCurrentText("Golden spiral")
+    assert isinstance(w.layout_, Spiral) and w.spiral_n.isVisible() and w.spiral_share.isVisible() and w.spiral_cw.isVisible()
+    w.spiral_n.setValue(3)
+    w.spiral_share.setValue(50)
+    w.spiral_cw.setChecked(False)
+    assert (w.layout_.photos, w.layout_.share, w.layout_.clockwise) == (3, 0.5, False) and w.layout_.pages == 2
+    w.kind.setCurrentText("Honeycomb")
+    assert isinstance(w.layout_, Honeycomb) and w.hex_size.isVisible() and w.marks.isVisible() and w.per_sheet.isVisible()
+    assert "cells per page" in w.per_sheet.text()
+    w.hex_size.setValue(60)
+    assert abs(w.layout_.size - 60 * MM) < 1e-6
+    n = w.layout_.per_page
+    w.hex_size.setValue(30)
+    assert w.layout_.per_page > n                                                   # smaller cells: more per page
+    w.kind.setCurrentText("Calendar")
+    assert isinstance(w.layout_, Calendar) and w.cal_year.isVisible() and w.cal_month.isVisible() and not w.hex_size.isVisible()
+    w.cal_year.setValue(2028)
+    w.cal_month.setCurrentIndex(10)                                                 # November
+    w.cal_months.setValue(4)
+    w.cal_week.setCurrentText("Sunday")
+    w.cal_share.setValue(45)
+    lay = w.layout_
+    assert (lay.year, lay.month, lay.months, lay.week_start, lay.photo_share) == (2028, 11, 4, "sunday", 0.45)
+    assert lay.pages == 4 and w.page_label.text().strip().endswith("/ 4")
+    for setup, check in (
+        (lambda: (w.kind.setCurrentText("Bento"), w.bento.setCurrentIndex(3)),
+         lambda: (w.kind.currentText(), w.bento.currentIndex()) == ("Bento", 3)),
+        (lambda: (w.kind.setCurrentText("Golden spiral"), w.spiral_n.setValue(7), w.spiral_cw.setChecked(False)),
+         lambda: (w.kind.currentText(), w.spiral_n.value(), w.spiral_cw.isChecked()) == ("Golden spiral", 7, False)),
+        (lambda: (w.kind.setCurrentText("Honeycomb"), w.hex_size.setValue(55)),
+         lambda: (w.kind.currentText(), round(w.hex_size.value())) == ("Honeycomb", 55)),
+        (lambda: (w.kind.setCurrentText("Calendar"), w.cal_year.setValue(2031), w.cal_month.setCurrentIndex(5), w.cal_week.setCurrentText("Monday")),
+         lambda: (w.kind.currentText(), w.cal_year.value(), w.cal_month.currentIndex(), w.cal_week.currentText()) == ("Calendar", 2031, 5, "Monday")),
+    ):
+        setup()
+        f = str(tmp_path / "p.json")
+        preset.save(w.layout_, f)
+        w.kind.setCurrentText("N-up")
+        w.layout_ = preset.load(f)
+        w._sync_controls()
+        assert check()
+
+
+def test_page_drag_swaps_bento_and_spiral_photos_and_calendar_pages_navigate(app, tmp_path):
+    w = _ready_window(app, tmp_path)
+    names = lambda: [i.path[-5:] for i in w.layout_.images]
+    for kind in ("Bento", "Golden spiral"):
+        w.layout_.images[:] = sorted(w.layout_.images, key=lambda i: i.path)
+        w.kind.setCurrentText(kind)
+        slots = dict(w._slots_now())
+        a, c = w._slot_rect(slots[0]).center(), w._slot_rect(slots[2]).center()
+        _mouse(app, w, "press", a)
+        _mouse(app, w, "move", (a + c) / 2)
+        _mouse(app, w, "move", c)
+        _mouse(app, w, "release", c)
+        assert names() == ["2.png", "1.png", "0.png"], kind
+    w.kind.setCurrentText("Calendar")
+    assert w.layout_.pages == 12 and w.page_label.text().strip() == "1 / 12"
+    w.goto(5)
+    assert w.page_no == 5 and w.page_label.text().strip() == "6 / 12"
+    assert len(w.layout_.slots(5)) == 1 and w.layout_.slots(5)[0][0] is w.layout_.images[5 % 3]   # photos repeat across months

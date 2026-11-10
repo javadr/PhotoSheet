@@ -1,6 +1,8 @@
 """Layout geometry: which slot each image gets, and how many pages. No rendering, no Qt."""
 from __future__ import annotations
 
+import calendar
+import datetime
 import math
 import os
 from dataclasses import dataclass, field
@@ -942,4 +944,238 @@ class Filmstrip(Strip):
                 out.append(("round", self._page_rect(x + edge, yy, hole_w, hole_h), (255, 255, 255)))
                 out.append(("round", self._page_rect(x + w - edge - hole_w, yy, hole_w, hole_h), (255, 255, 255)))
                 yy += pitch
+        return out
+
+
+# Bento templates: name -> (label, columns, rows, [(col, row, colspan, rowspan), ...]). The first cell is the biggest.
+BENTO = {
+    "hero-left": ("Hero left (3)", 3, 2, [(0, 0, 2, 2), (2, 0, 1, 1), (2, 1, 1, 1)]),
+    "hero-top": ("Hero top (3)", 2, 3, [(0, 0, 2, 2), (0, 2, 1, 1), (1, 2, 1, 1)]),
+    "wide": ("Wide (4)", 4, 2, [(0, 0, 2, 2), (2, 0, 2, 1), (2, 1, 1, 1), (3, 1, 1, 1)]),
+    "pinwheel": ("Pinwheel (5)", 3, 3, [(0, 0, 2, 1), (2, 0, 1, 2), (1, 2, 2, 1), (0, 1, 1, 2), (1, 1, 1, 1)]),
+    "magazine": ("Magazine (5)", 4, 3, [(0, 0, 2, 3), (2, 0, 2, 1), (2, 1, 1, 2), (3, 1, 1, 1), (3, 2, 1, 1)]),
+    "six-tiles": ("Six tiles (6)", 3, 3, [(0, 0, 2, 2), (2, 0, 1, 1), (2, 1, 1, 1), (0, 2, 1, 1), (1, 2, 1, 1), (2, 2, 1, 1)]),
+}
+
+
+@dataclass
+class Bento(Layout):
+    """Asymmetric tile grids (one big tile, several small ones) that fill the whole page, repeated per page.
+
+    Each page takes as many photos as the template has tiles, in order; the first tile is the biggest.
+    """
+    template: str = "hero-left"
+    gutter: float = 6.0
+
+    def __post_init__(self):
+        if self.template not in BENTO:
+            raise ValueError(f"unknown bento template {self.template!r}")
+        if self.gutter < 0:
+            raise ValueError("gutter must be >= 0")
+
+    @property
+    def per_page(self) -> int:
+        return len(BENTO[self.template][3])
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.per_page))
+
+    def _rects(self) -> list[Rect]:
+        _, cols, rows, cells = BENTO[self.template]
+        p, g = self.page, self.gutter
+        cw, ch = (p.imageable_w - g * (cols - 1)) / cols, (p.imageable_h - g * (rows - 1)) / rows
+        return [Rect(p.left + c * (cw + g), p.top + r * (ch + g), cs * cw + (cs - 1) * g, rs * ch + (rs - 1) * g)
+                for c, r, cs, rs in cells]
+
+    def slots(self, page: int):
+        start = page * self.per_page
+        return list(zip(self.images[start:start + self.per_page], self._rects()))
+
+
+@dataclass
+class Spiral(Layout):
+    """Photos in a golden-ratio spiral: each takes `share` of what is left, turning a quarter each time.
+
+    Each page takes `photos` photos in order; the last one fills the remaining space.
+    """
+    photos: int = 5
+    share: float = 0.618
+    clockwise: bool = True
+    gutter: float = 6.0
+
+    def __post_init__(self):
+        if self.photos < 2 or not 0.3 <= self.share <= 0.8 or self.gutter < 0:
+            raise ValueError("photos must be >= 2, share between 0.3 and 0.8, gutter >= 0")
+
+    @property
+    def per_page(self) -> int:
+        return self.photos
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.photos))
+
+    def _rects(self) -> list[Rect]:
+        p, g = self.page, self.gutter
+        x, y, w, h = p.left, p.top, p.imageable_w, p.imageable_h
+        order = ("left", "top", "right", "bottom") if self.clockwise else ("left", "bottom", "right", "top")
+        out = []
+        for i in range(self.photos - 1):
+            side = order[i % 4]
+            if side in ("left", "right"):
+                pw = w * self.share
+                out.append(Rect(x if side == "left" else x + w - pw, y, pw, h))
+                if side == "left":
+                    x += pw + g
+                w = max(1.0, w - pw - g)
+            else:
+                ph = h * self.share
+                out.append(Rect(x, y if side == "top" else y + h - ph, w, ph))
+                if side == "top":
+                    y += ph + g
+                h = max(1.0, h - ph - g)
+        out.append(Rect(x, y, w, h))
+        return out
+
+    def slots(self, page: int):
+        start = page * self.photos
+        return list(zip(self.images[start:start + self.photos], self._rects()))
+
+
+@dataclass
+class Honeycomb(Layout):
+    """Hexagon-shaped photos nested like a honeycomb. `size` is the width across the flat sides."""
+    size: float = 40 * MM
+    gutter: float = 6.0
+    shape = "hexagon"
+
+    def __post_init__(self):
+        if self.size <= 0 or self.gutter < 0:
+            raise ValueError("size must be > 0 and gutter >= 0")
+
+    @property
+    def cell_h(self) -> float:
+        return self.size * 2 / math.sqrt(3)   # point to point
+
+    def _positions(self) -> list[tuple[float, float]]:
+        p, g, w, h = self.page, self.gutter, self.size, self.cell_h
+        pitch = w + g
+        if p.imageable_w < w or p.imageable_h < h:
+            return []
+        row_pitch = pitch * math.sqrt(3) / 2
+        rows = int((p.imageable_h - h) // row_pitch + 1e-9) + 1
+        even, odd = int((p.imageable_w + g) // pitch), int((p.imageable_w + g - pitch / 2) // pitch)
+        counts = [even if r % 2 == 0 else odd for r in range(rows)]
+        offs = [pitch / 2 if r % 2 else 0.0 for r in range(rows)]
+        block_w = max((o + n * pitch - g for o, n in zip(offs, counts) if n), default=0.0)
+        x0 = p.left + (p.imageable_w - block_w) / 2
+        y0 = p.top + (p.imageable_h - ((rows - 1) * row_pitch + h)) / 2
+        return [(x0 + offs[r] + c * pitch, y0 + r * row_pitch) for r in range(rows) for c in range(counts[r])]
+
+    @property
+    def per_page(self) -> int:
+        return len(self._positions())
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.per_page)) if self.per_page else 1
+
+    def slots(self, page: int):
+        pos = self._positions()
+        start = page * len(pos)
+        return [(img, Rect(x, y, self.size, self.cell_h)) for img, (x, y) in zip(self.images[start:start + len(pos)], pos)]
+
+    def cut_guides(self, page: int):
+        if not self.marks:
+            return []
+        out = []
+        for _, r in self.slots(page):
+            pts = [(r.x + r.w / 2, r.y), (r.x + r.w, r.y + r.h / 4), (r.x + r.w, r.y + 3 * r.h / 4),
+                   (r.x + r.w / 2, r.y + r.h), (r.x, r.y + 3 * r.h / 4), (r.x, r.y + r.h / 4), (r.x + r.w / 2, r.y)]
+            out += [(a[0], a[1], b[0], b[1]) for a, b in zip(pts, pts[1:])]
+        return out
+
+
+# Fixed English names: the calendar module follows the system language, which would change the sheet from
+# one computer to the next (and the caption font has to be able to draw every letter).
+MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+          "November", "December")
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+@dataclass
+class Calendar(Layout):
+    """A wall calendar: a photo above a month grid, one page per month.
+
+    Month n uses photo n (the photos repeat if there are fewer than months). English month and day names (fixed, whatever the system language).
+    """
+    year: int = field(default_factory=lambda: datetime.date.today().year)
+    month: int = 1             # the first month (1 = January)
+    months: int = 12           # how many pages
+    week_start: str = "monday"   # monday | sunday
+    photo_share: float = 0.55  # the photo's share of the page height
+    gutter: float = 8.0
+
+    def __post_init__(self):
+        if not 1 <= self.month <= 12 or not 1 <= self.months <= 24 or not 1 <= self.year <= 9999:
+            raise ValueError("year 1-9999, month 1-12 and months 1-24 expected")
+        if self.week_start not in ("monday", "sunday") or not 0.2 <= self.photo_share <= 0.8 or self.gutter < 0:
+            raise ValueError("week_start monday|sunday, photo_share between 0.2 and 0.8, gutter >= 0")
+
+    @property
+    def pages(self) -> int:
+        return self.months
+
+    def month_of(self, page: int) -> tuple[int, int]:
+        """(year, month) shown on a page."""
+        m = self.month - 1 + page
+        return self.year + m // 12, m % 12 + 1
+
+    def _first(self) -> int:
+        return 0 if self.week_start == "monday" else 6   # calendar module: Monday = 0, Sunday = 6
+
+    def _geometry(self, page: int):
+        p, g = self.page, self.gutter
+        photo = Rect(p.left, p.top, p.imageable_w, p.imageable_h * self.photo_share)
+        title = Rect(p.left, photo.y + photo.h + g, p.imageable_w, 30.0)
+        head = Rect(p.left, title.y + title.h, p.imageable_w, 16.0)
+        y, mo = self.month_of(page)
+        weeks = calendar.Calendar(self._first()).monthdayscalendar(y, mo)
+        top = head.y + head.h
+        ch = max(8.0, (p.top + p.imageable_h - top) / len(weeks))
+        cw = p.imageable_w / 7
+        return photo, title, head, weeks, top, cw, ch
+
+    def slots(self, page: int):
+        if not self.images or page >= self.months:
+            return []
+        return [(self.images[page % len(self.images)], self._geometry(page)[0])]
+
+    def shapes(self, page: int):
+        if page >= self.months:
+            return []
+        _, _, _, weeks, top, cw, ch = self._geometry(page)
+        left = self.page.left
+        return [("frame", Rect(left + c * cw, top + r * ch, cw, ch), (205, 205, 205))
+                for r in range(len(weeks)) for c in range(7)]
+
+    def captions(self, page: int):
+        if page >= self.months:
+            return []
+        y, mo = self.month_of(page)
+        _, title, head, weeks, top, cw, ch = self._geometry(page)
+        left, first = self.page.left, self._first()
+        out = [(f"{MONTHS[mo - 1]} {y}", title, (40, 40, 40))]
+        weekend = lambda col: (first + col) % 7 in (5, 6)
+        for c in range(7):
+            out.append((WEEKDAYS[(first + c) % 7], Rect(left + c * cw, head.y, cw, head.h),
+                        (190, 45, 45) if weekend(c) else (90, 90, 90)))
+        font = min(14.0, max(7.0, ch * 0.35))
+        for r, week in enumerate(weeks):
+            for c, day in enumerate(week):
+                if day:
+                    cell = Rect(left + c * cw, top + r * ch, cw, ch)
+                    out.append((str(day), Rect(cell.x, cell.y + (ch - font * 1.8) / 2, cw, font * 1.8),
+                                (190, 45, 45) if weekend(c) else (50, 50, 50)))
         return out

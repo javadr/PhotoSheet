@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import datetime
 
 from PIL import Image
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
@@ -15,9 +16,9 @@ from PySide6.QtWidgets import (
 
 from ..core import preset
 from ..core.geometry import PageExtent, Rect, crop_overflow
-from ..core.layouts import (MM, RECIPES, Badges, Carousel, Collage, Feature, Filmstrip, FixedSize, FramedPrint,
-                            ImageItem, Mosaic, NUp, Package, Passport, Polaroid, Poster, Single, Strip, Triptych,
-                            aspect, snap_delta)
+from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip,
+                            FixedSize, FramedPrint, Honeycomb, ImageItem, Mosaic, NUp, Package, Passport,
+                            Polaroid, Poster, Single, Spiral, Strip, Triptych, aspect, snap_delta)
 from ..core.render import render_page
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
@@ -25,11 +26,13 @@ PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
 KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
          "Fixed size": FixedSize, "Passport": Passport, "Mosaic": Mosaic, "Photo strip": Strip, "Polaroid": Polaroid,
          "Triptych": Triptych, "Package": Package, "Collage": Collage, "Framed print": FramedPrint,
-         "Badges": Badges, "Feature": Feature, "Film strip": Filmstrip}
+         "Badges": Badges, "Feature": Feature, "Film strip": Filmstrip, "Bento": Bento,
+         "Golden spiral": Spiral, "Honeycomb": Honeycomb, "Calendar": Calendar}
 KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "carousel",
         "Fixed size": "fixed", "Passport": "passport", "Mosaic": "mosaic", "Photo strip": "strip", "Polaroid": "polaroid",
         "Triptych": "triptych", "Package": "package", "Collage": "collage", "Framed print": "framed",
-        "Badges": "badges", "Feature": "feature", "Film strip": "filmstrip"}
+        "Badges": "badges", "Feature": "feature", "Film strip": "filmstrip", "Bento": "bento",
+        "Golden spiral": "spiral", "Honeycomb": "honeycomb", "Calendar": "calendar"}
 HANDLE = 5   # half the size of a Collage resize handle, in px
 DIRECTIONS = {"Automatic": "auto", "Vertical": "vertical", "Horizontal": "horizontal"}   # which way strips run
 SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
@@ -356,6 +359,20 @@ class MainWindow(QMainWindow):
         self.direction = QComboBox()
         self.direction.addItems(DIRECTIONS)
         self.direction.setToolTip("Automatic: strips run sideways on a landscape page and top to bottom on a portrait page.")
+        self.bento = QComboBox()
+        self.bento.addItems([label for label, _, _, _ in BENTO.values()])
+        self.spiral_n = self._spin(2, 12, 5)
+        self.spiral_share = self._spin(30, 80, 62)
+        self.spiral_cw = QCheckBox("Clockwise")
+        self.spiral_cw.setChecked(True)
+        self.hex_size = self._dspin(10, 150, 40)
+        self.cal_year = self._spin(1900, 2200, datetime.date.today().year)
+        self.cal_month = QComboBox()
+        self.cal_month.addItems(MONTHS)
+        self.cal_months = self._spin(1, 24, 12)
+        self.cal_week = QComboBox()
+        self.cal_week.addItems(["Monday", "Sunday"])
+        self.cal_share = self._spin(20, 80, 55)
         self.collage_hint = QLabel("Drag a photo to move it, drag a corner\nto resize (Shift = free shape).")
         self.strip_w, self.strip_h = self._dspin(20, 400, 51), self._dspin(40, 600, 152)
         self.crop = QCheckBox("Crop all images to fill")
@@ -366,15 +383,15 @@ class MainWindow(QMainWindow):
         for key, label, w in [
             ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Orientation", self.orient), ("all", "Margin (pt)", self.margin),
             ("nup,polaroid", "Rows", self.rows), ("nup,polaroid", "Columns", self.cols),
-            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,feature", "Gutter (pt)", self.gutter),
+            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,feature,bento,spiral,honeycomb,calendar", "Gutter (pt)", self.gutter),
             ("nup,polaroid,framed", "Captions", self.caption),
-            ("nup,fixed,passport,polaroid,package,badges", "", self.marks),
+            ("nup,fixed,passport,polaroid,package,badges,honeycomb", "", self.marks),
             ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
             ("fixed,passport", "Print size", self.size_preset), ("fixed,passport", "Width (mm)", self.cell_w),
             ("fixed,passport", "Height (mm)", self.cell_h), ("passport", "Copies per photo", self.copies),
-            ("fixed,passport,package,badges", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
+            ("fixed,passport,package,badges,honeycomb", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
             ("strip,filmstrip", "Frames per strip", self.frames), ("strip,filmstrip", "Strip width (mm)", self.strip_w),
             ("strip,filmstrip", "Direction", self.direction),
             ("strip", "Strip length (mm)", self.strip_h),
@@ -384,6 +401,11 @@ class MainWindow(QMainWindow):
             ("framed", "Mat width (pt)", self.mat), ("framed", "Mat colour", self.mat_color),
             ("badges", "Diameter (mm)", self.diameter), ("badges", "", self.staggered),
             ("feature", "Small photos", self.thumbs), ("feature", "", self.side), ("feature", "Hero size (%)", self.hero_share),
+            ("bento", "Template", self.bento), ("spiral", "Photos per page", self.spiral_n),
+            ("spiral", "Big photo share (%)", self.spiral_share), ("spiral", "", self.spiral_cw),
+            ("honeycomb", "Cell width (mm)", self.hex_size), ("calendar", "Year", self.cal_year),
+            ("calendar", "First month", self.cal_month), ("calendar", "Months", self.cal_months),
+            ("calendar", "Week starts on", self.cal_week), ("calendar", "Photo size (%)", self.cal_share),
             ("all", "", self.crop),
         ]:
             form.addRow(label, w)
@@ -561,6 +583,17 @@ class MainWindow(QMainWindow):
         elif cls is Filmstrip:
             kw = dict(frames=self.frames.value(), strip_w=self.strip_w.value() * MM, gutter=self.gutter.value(),
                       direction=DIRECTIONS[self.direction.currentText()])
+        elif cls is Bento:
+            kw = dict(template=list(BENTO)[self.bento.currentIndex()], gutter=self.gutter.value())
+        elif cls is Spiral:
+            kw = dict(photos=self.spiral_n.value(), share=self.spiral_share.value() / 100,
+                      clockwise=self.spiral_cw.isChecked(), gutter=self.gutter.value())
+        elif cls is Honeycomb:
+            kw = dict(size=self.hex_size.value() * MM, gutter=self.gutter.value(), marks=self.marks.isChecked())
+        elif cls is Calendar:
+            kw = dict(year=self.cal_year.value(), month=self.cal_month.currentIndex() + 1, months=self.cal_months.value(),
+                      week_start=self.cal_week.currentText().lower(), photo_share=self.cal_share.value() / 100,
+                      gutter=self.gutter.value())
         self.layout_ = cls(page=page, **kw)
         for it in old.images:
             it.crop = self.crop.isChecked()
@@ -591,6 +624,8 @@ class MainWindow(QMainWindow):
                                    else f"{lay.missing} of {total} do not fit: use bigger paper")
         elif isinstance(lay, Badges):
             self.per_sheet.setText(f"{lay.per_page} badges per page" if lay.per_page else "too big for the page")
+        elif isinstance(lay, Honeycomb):
+            self.per_sheet.setText(f"{lay.per_page} cells per page" if lay.per_page else "too big for the page")
         else:
             self.per_sheet.setText("")
 
@@ -641,6 +676,20 @@ class MainWindow(QMainWindow):
             self.snap.setChecked(lay.snap)
         if isinstance(lay, FramedPrint):
             self.mat_color.setCurrentText(lay.color.capitalize())
+        if isinstance(lay, Bento):
+            self.bento.setCurrentIndex(list(BENTO).index(lay.template))
+        if isinstance(lay, Spiral):
+            self.spiral_n.setValue(lay.photos)
+            self.spiral_share.setValue(round(lay.share * 100))
+            self.spiral_cw.setChecked(lay.clockwise)
+        if isinstance(lay, Honeycomb):
+            self.hex_size.setValue(lay.size / MM)
+        if isinstance(lay, Calendar):
+            self.cal_year.setValue(lay.year)
+            self.cal_month.setCurrentIndex(lay.month - 1)
+            self.cal_months.setValue(lay.months)
+            self.cal_week.setCurrentText(lay.week_start.capitalize())
+            self.cal_share.setValue(round(lay.photo_share * 100))
         if isinstance(lay, Badges):
             self.diameter.setValue(lay.diameter / MM)
             self.staggered.setChecked(lay.staggered)
