@@ -74,6 +74,9 @@ def test_fit_zoom_fits_viewport_and_actual_size_is_96dpi(app):
 
 def _win_with_images(tmp_path, n=3):
     w = MainWindow()
+    w.rows.setValue(2)      # these tests were written for a 2 x 2 grid and for plain-drag swapping (crop off);
+    w.cols.setValue(2)      # the app itself starts at 3 x 3 with "Crop all images to fill" on
+    w.crop.setChecked(False)
     for i in range(n):
         p = tmp_path / f"{i}.png"
         Image.new("RGB", (40, 30), (i * 80, 0, 0)).save(p)
@@ -1241,3 +1244,249 @@ def test_page_drag_swaps_fan_brick_and_timeline_photos(app, tmp_path):
         _mouse(app, w, "move", c)
         _mouse(app, w, "release", c)
         assert names() == ["2.png", "1.png", "0.png"], kind
+
+
+def test_grid_defaults_each_layout_starts_with_its_own_until_the_user_chooses_one(app):
+    from photosheet.core.layouts import Brick, Masonry, NUp, Polaroid, Shapes
+    assert (NUp().rows, NUp().cols) == (3, 3) and (Polaroid().rows, Polaroid().cols) == (3, 3)
+    assert (Shapes().rows, Shapes().cols) == (3, 2) and Masonry().columns == 3
+    assert (Brick().rows, Brick().columns) == (5, 5)
+    w = MainWindow()
+    assert (w.rows.value(), w.cols.value()) == (3, 3) and (w.layout_.rows, w.layout_.cols) == (3, 3)
+    w.kind.setCurrentText("Brick")
+    assert (w.rows.value(), w.cols.value()) == (5, 5) and (w.layout_.rows, w.layout_.columns) == (5, 5)
+    w.kind.setCurrentText("Shapes")
+    assert (w.layout_.rows, w.layout_.cols) == (3, 2) and (w.rows.value(), w.cols.value()) == (3, 2)
+    w.kind.setCurrentText("N-up")
+    assert (w.layout_.rows, w.layout_.cols) == (3, 3)
+    w.kind.setCurrentText("Carousel")                                              # a layout with no grid leaves the boxes alone
+    w.kind.setCurrentText("Brick")
+    assert (w.layout_.rows, w.layout_.columns) == (5, 5)
+    w2 = MainWindow()
+    w2.rows.setValue(4)                                                           # the user picks a grid: it is kept everywhere
+    w2.kind.setCurrentText("Brick")
+    assert (w2.rows.value(), w2.layout_.rows) == (4, 4) and w2.layout_.columns == 3
+    w2.kind.setCurrentText("Polaroid")
+    assert w2.layout_.rows == 4
+
+
+def test_crop_all_images_to_fill_is_on_from_the_start_and_plain_drag_then_repositions(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = MainWindow()
+    assert w.crop.isChecked()
+    for i in range(3):
+        Image.new("RGB", (400, 100), (i * 80, 0, 0)).save(tmp_path / f"{i}.png")
+    w._add_files([str(tmp_path / f"{i}.png") for i in range(3)])
+    assert all(it.crop for it in w.layout_.images)                                 # photos added now are cropped to their frame
+    w.kind.setCurrentText("Polaroid")
+    assert all(it.crop for it in w.layout_.images) and w.crop.isChecked()          # and it stays on across layouts
+    w.rows.setValue(1)
+    w.cols.setValue(3)
+    w.resize(1100, 800)
+    w.show()
+    import time
+    t = time.time() + 5
+    while w.preview.pixmap().isNull() and time.time() < t:
+        app.processEvents()
+    slots = dict(w._slots_now())
+    a = w._slot_rect(slots[0]).center()
+    names = lambda: [i.path[-5:] for i in w.layout_.images]
+    _mouse(app, w, "press", a)
+    _mouse(app, w, "move", a + QPointF(8, 0))
+    _mouse(app, w, "move", a + QPointF(30, 0))
+    assert w._pan is not None                                                      # crop on: a plain drag moves the photo in its frame
+    _mouse(app, w, "release", a + QPointF(30, 0))
+    assert names() == ["0.png", "1.png", "2.png"]
+    c = w._slot_rect(slots[2]).center()
+    shift = Qt.KeyboardModifier.ShiftModifier                                      # Shift swaps instead
+    _mouse(app, w, "press", w._slot_rect(slots[0]).center(), shift)
+    _mouse(app, w, "move", (a + c) / 2, shift)
+    _mouse(app, w, "move", c, shift)
+    _mouse(app, w, "release", c, shift)
+    assert names() == ["2.png", "1.png", "0.png"]
+    w.crop.setChecked(False)
+    assert not any(it.crop for it in w.layout_.images)                             # unticking still turns it off for every photo
+
+
+
+# ---- the Layout and Images panels fit short windows: pinned part + scrolling part ----
+
+def _short_window(app, tmp_path, kind="Passport", n=3):
+    w = _win_with_images(tmp_path, n)
+    w.show()
+    w.resize(1100, w.minimumSizeHint().height())          # as short as the window will go
+    w.kind.setCurrentText(kind)
+    for _ in range(10):
+        app.processEvents()
+    return w
+
+
+def test_window_can_shrink_far_below_what_the_panels_used_to_need(app, tmp_path):
+    w = _short_window(app, tmp_path)
+    assert w.minimumSizeHint().height() <= 300                   # it was 416 before the panels scrolled (offscreen font)
+    assert w.layout_dock.widget().minimumSizeHint().height() <= 260 and w.image_dock.widget().minimumSizeHint().height() <= 260
+    assert w.height() == w.minimumSizeHint().height() or abs(w.height() - w.minimumSizeHint().height()) < 4
+
+
+def test_layout_panel_keeps_page_settings_in_view_and_scrolls_the_options(app, tmp_path):
+    from PySide6.QtCore import QPoint
+    w = _short_window(app, tmp_path)
+    pane, bar = w.layout_pane, w.layout_pane.area.verticalScrollBar()
+    assert bar.maximum() > 0                                         # too short for every option: it scrolls
+    dock = w.layout_dock.widget()
+    for pinned in (w.kind, w.page_size, w.orient, w.margin):          # the page settings never scroll away
+        top = pinned.mapTo(dock, QPoint(0, 0)).y()
+        assert 0 <= top and top + pinned.height() <= dock.height()
+    vp = pane.area.viewport()
+    inside = lambda ctl: 0 <= ctl.mapTo(vp, QPoint(0, 0)).y() and ctl.mapTo(vp, QPoint(0, 0)).y() + ctl.height() <= vp.height()
+    assert not inside(w.crop)                                         # the last option starts out of view...
+    bar.setValue(bar.maximum())
+    assert inside(w.crop)                                             # ...and scrolling reaches it
+    assert w.kind.isVisible()                                         # the pinned controls are still there at the end
+    for ctl in (w.gutter, w.cell_w, w.cell_h, w.copies):              # every option of the layout can be scrolled to
+        bar.setValue(0)
+        ctl.setFocus()
+        app.processEvents()
+
+
+def test_edge_lines_show_only_where_there_is_more_to_scroll_to(app, tmp_path):
+    w = _short_window(app, tmp_path)
+    pane, bar = w.layout_pane, w.layout_pane.area.verticalScrollBar()
+    bar.setValue(0)
+    assert not pane.top.isVisibleTo(w) and pane.bottom.isVisibleTo(w)             # at the top: more below
+    bar.setValue(bar.maximum() // 2)
+    assert pane.top.isVisibleTo(w) and pane.bottom.isVisibleTo(w)                 # in the middle: more both ways
+    bar.setValue(bar.maximum())
+    assert pane.top.isVisibleTo(w) and not pane.bottom.isVisibleTo(w)             # at the end: more above only
+    assert pane.top.height() == 1 and pane.bottom.height() == 1
+    w.resize(1100, 1000)                                                          # plenty of room: nothing to scroll, no lines
+    w.kind.setCurrentText("Single")
+    for _ in range(10):
+        app.processEvents()
+    assert bar.maximum() == 0 and not pane.top.isVisibleTo(w) and not pane.bottom.isVisibleTo(w)
+
+
+def test_keyboard_focus_scrolls_a_hidden_control_into_view(app, tmp_path):
+    from PySide6.QtCore import QPoint
+    w = _short_window(app, tmp_path)
+    w.activateWindow()
+    bar = w.layout_pane.area.verticalScrollBar()
+    bar.setValue(0)
+    last = w.copies if w.copies.isVisibleTo(w) else w.cell_h
+    last.setFocus(Qt.FocusReason.TabFocusReason)                                   # Tab reached a control below the fold
+    for _ in range(5):
+        app.processEvents()
+    vp = w.layout_pane.area.viewport()
+    y = last.mapTo(vp, QPoint(0, 0)).y()
+    assert bar.value() > 0 and 0 <= y and y + last.height() <= vp.height()
+
+
+def test_switching_layout_returns_the_options_to_the_top(app, tmp_path):
+    w = _short_window(app, tmp_path)
+    bar = w.layout_pane.area.verticalScrollBar()
+    bar.setValue(bar.maximum())
+    assert bar.value() > 0
+    w.kind.setCurrentText("Calendar")
+    for _ in range(5):
+        app.processEvents()
+    assert bar.value() == 0                                                       # a different layout starts at its first option
+    w.cal_year.setValue(2031)                                                     # editing an option must not jump the panel
+    assert bar.value() == 0
+
+
+def test_pinned_and_scrolling_rows_line_up_on_both_edges_with_and_without_a_scroll_bar(app, tmp_path):
+    from PySide6.QtCore import QPoint
+    for height_free in (True, False):
+        w = _win_with_images(tmp_path, 2)
+        w.show()
+        w.resize(1100, 1000 if height_free else w.minimumSizeHint().height())
+        w.kind.setCurrentText("Passport")
+        for _ in range(10):
+            app.processEvents()
+        bar = w.layout_pane.area.verticalScrollBar()
+        assert (bar.maximum() == 0) == height_free
+        left = lambda c: c.mapTo(w, QPoint(0, 0)).x()
+        right = lambda c: left(c) + c.width()
+        assert left(w.kind) == left(w.gutter) == left(w.cell_w)                    # one column of fields
+        assert right(w.kind) == right(w.gutter) == right(w.cell_w)                 # and they end together, scroll bar or not
+
+
+def test_images_panel_keeps_the_list_and_buttons_and_scrolls_the_effect_controls(app, tmp_path):
+    from PySide6.QtCore import QPoint
+    w = _short_window(app, tmp_path, kind="N-up", n=4)
+    w.list.setCurrentRow(0)
+    for _ in range(5):
+        app.processEvents()
+    assert w.list.height() >= 90                                                   # the list never collapses
+    bar = w.fx_pane.area.verticalScrollBar()
+    assert bar.maximum() > 0                                                       # too short for six effect controls: they scroll
+    bar.setValue(bar.maximum())
+    vp = w.fx_pane.area.viewport()
+    y = w.flipv.mapTo(vp, QPoint(0, 0)).y()
+    assert 0 <= y and y + w.flipv.height() <= vp.height()                          # the last control can be reached
+    dock = w.image_dock.widget()
+    for ctl in (w.list,):
+        assert ctl.mapTo(dock, QPoint(0, 0)).y() >= 0
+    w.resize(1100, 1000)
+    for _ in range(10):
+        app.processEvents()
+    assert bar.maximum() == 0 and not w.fx_pane.bottom.isVisibleTo(w)             # in a tall window everything shows, no bar
+
+
+def test_panel_labels_keep_a_margin_from_the_panel_edge(app, tmp_path):
+    from PySide6.QtCore import QPoint
+    w = _win_with_images(tmp_path, 2)
+    w.show()
+    for _ in range(6):
+        app.processEvents()
+    dock = w.layout_dock.widget()
+    pinned_label = w._pinned_form.labelForField(w.kind)
+    option_label = w.layout_pane.content.layout().labelForField(w.gutter)
+    for lab in (pinned_label, option_label):
+        assert lab.mapTo(dock, QPoint(0, 0)).x() >= 6, lab.text()                     # not flush against the panel's edge
+    assert pinned_label.mapTo(dock, QPoint(0, 0)).x() == option_label.mapTo(dock, QPoint(0, 0)).x()   # and both sections line up
+    assert w.kind.mapTo(dock, QPoint(0, 0)).x() == w.gutter.mapTo(dock, QPoint(0, 0)).x()
+
+
+def test_brick_starts_on_landscape_paper_other_layouts_on_portrait_and_a_choice_sticks(app, tmp_path):
+    from photosheet.core import preset
+    land = lambda w: w.layout_.page.width > w.layout_.page.height
+    w = MainWindow()
+    assert w.orient.currentText() == "Portrait" and not land(w)
+    w.kind.setCurrentText("Brick")
+    assert w.orient.currentText() == "Landscape" and land(w)                      # Brick's own start
+    w.kind.setCurrentText("N-up")
+    assert w.orient.currentText() == "Portrait" and not land(w)                   # and it goes back for everything else
+    w.kind.setCurrentText("Brick")
+    w.kind.setCurrentText("Timeline")
+    assert not land(w)
+    # the user picks an orientation: it is kept, whichever layout comes next
+    w2 = MainWindow()
+    w2.orient.setCurrentText("Landscape")
+    w2.kind.setCurrentText("N-up")
+    w2.kind.setCurrentText("Poster")
+    assert land(w2)
+    w3 = MainWindow()
+    w3.kind.setCurrentText("Brick")
+    assert land(w3)
+    w3.orient.setCurrentText("Portrait")                                           # the user turns Brick to portrait on purpose
+    assert not land(w3) and w3.layout_.page.height == 842
+    w3.kind.setCurrentText("N-up")
+    w3.kind.setCurrentText("Brick")
+    assert not land(w3)                                                            # not forced back to landscape
+    # a saved preset keeps its own orientation: loading does not apply any default
+    f = str(tmp_path / "p.json")
+    w4 = MainWindow()
+    w4.kind.setCurrentText("Brick")
+    w4.orient.setCurrentText("Portrait")
+    preset.save(w4.layout_, f)
+    w5 = MainWindow()
+    w5.layout_ = preset.load(f)
+    w5._sync_controls()
+    assert w5.kind.currentText() == "Brick" and w5.orient.currentText() == "Portrait" and not land(w5)
+    w5.cols.setValue(4)                                                            # editing afterwards keeps it
+    assert not land(w5) and w5.layout_.columns == 4
+    for kind in ("N-up", "Shapes", "Calendar", "Passport", "Collage"):             # no other layout starts sideways
+        w6 = MainWindow()
+        w6.kind.setCurrentText(kind)
+        assert w6.orient.currentText() == "Portrait", kind

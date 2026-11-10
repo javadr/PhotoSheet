@@ -18,12 +18,13 @@ PAGES = {"a4": (595, 842), "letter": (612, 792), "a5": (420, 595), "4x6": (288, 
 
 def build(args) -> NUp | Single | Poster:
     w, h = PAGES[args.page]
-    if args.landscape:
+    grid = {k: v for k, v in (("rows", args.rows), ("cols", args.cols)) if v is not None}   # else each layout's own default
+    if args.landscape or (args.layout == "brick" and not args.portrait):   # Brick starts on landscape paper
         w, h = h, w
     page = PageExtent(w, h)
     page.set_margins(*(args.margin,) * 4)
     if args.layout == "nup":
-        lay = NUp(page=page, rows=args.rows, cols=args.cols, caption=args.caption, marks=args.marks)
+        lay = NUp(page=page, caption=args.caption, marks=args.marks, **grid)
     elif args.layout == "single":
         lay = Single(page=page)
     elif args.layout == "fixed":
@@ -32,7 +33,7 @@ def build(args) -> NUp | Single | Poster:
         lay = Passport(page=page, cell_w=args.cell_w * MM, cell_h=args.cell_h * MM, copies=args.copies,
                        hgutter=args.gutter, vgutter=args.gutter, marks=args.marks)
     elif args.layout == "polaroid":
-        lay = Polaroid(page=page, rows=args.rows, cols=args.cols, caption=args.caption, marks=args.marks,
+        lay = Polaroid(page=page, caption=args.caption, marks=args.marks, **grid,
                        border=args.border)
     elif args.layout == "triptych":
         lay = Triptych(page=page, panels=args.panels, gap=args.gutter, vertical=args.vertical)
@@ -60,9 +61,9 @@ def build(args) -> NUp | Single | Poster:
         lay = Calendar(page=page, year=args.year, month=args.month, months=args.months, week_start=args.week_start,
                        photo_share=args.photo_share, gutter=args.gutter)
     elif args.layout == "masonry":
-        lay = Masonry(page=page, columns=args.cols, gutter=args.gutter)
+        lay = Masonry(page=page, gutter=args.gutter, **({} if args.cols is None else {"columns": args.cols}))
     elif args.layout == "shapes":
-        lay = Shapes(page=page, rows=args.rows, cols=args.cols, gutter=args.gutter, kind=args.shape)
+        lay = Shapes(page=page, gutter=args.gutter, kind=args.shape, **grid)
     elif args.layout == "ring":
         lay = Ring(page=page, photos=args.ring_photos, center=not args.no_center, gutter=args.gutter, marks=args.marks)
     elif args.layout == "scatter":
@@ -75,7 +76,8 @@ def build(args) -> NUp | Single | Poster:
     elif args.layout == "timeline":
         lay = Timeline(page=page, photos=args.timeline_photos, dates=not args.no_dates, gutter=args.gutter)
     elif args.layout == "brick":
-        lay = Brick(page=page, columns=max(2, args.cols), rows=args.rows, gutter=args.gutter)
+        lay = Brick(page=page, gutter=args.gutter, **({} if args.rows is None else {"rows": args.rows}),
+                    **({} if args.cols is None else {"columns": max(2, args.cols)}))
     elif args.layout == "strip":
         lay = Strip(page=page, frames=args.frames or 4, strip_w=(args.strip_w or 51) * MM, strip_h=args.strip_h * MM,
                     direction=args.direction)
@@ -112,8 +114,8 @@ def main(argv=None) -> int:
                                                        "collage", "framed", "badges", "feature", "filmstrip", "bento", "spiral",
                                                        "honeycomb", "calendar", "masonry", "shapes", "ring", "scatter", "slant", "fan", "timeline",
                                                        "brick"], default="nup")
-    ap.add_argument("--rows", type=int, default=2)
-    ap.add_argument("--cols", type=int, default=2)
+    ap.add_argument("--rows", type=int, help="grid rows (default: 3, Shapes 3, Brick 6)")
+    ap.add_argument("--cols", type=int, help="grid columns (default: 3, Shapes 2, Masonry 3, Brick 6)")
     ap.add_argument("--segments", type=int, default=4)
     ap.add_argument("--cell-w", type=float, default=35, help="fixed layout cell width, mm (default: passport)")
     ap.add_argument("--cell-h", type=float, default=45, help="fixed layout cell height, mm")
@@ -161,6 +163,7 @@ def main(argv=None) -> int:
     ap.add_argument("--timeline-photos", type=int, default=6, help="timeline: photos per page")
     ap.add_argument("--no-dates", action="store_true", help="timeline: leave the date captions out")
     ap.add_argument("--landscape", action="store_true", help="turn the paper sideways (e.g. 4x6 for 4 x 2 photos)")
+    ap.add_argument("--portrait", action="store_true", help="brick: use portrait paper (brick defaults to landscape)")
     ap.add_argument("--copies", type=int, default=0, help="passport: copies of each photo, 0 = fill the sheet")
     ap.add_argument("--gutter", type=float, default=4, help="gap between photos / panels / prints, points")
     ap.add_argument("--page", choices=list(PAGES), default="a4")

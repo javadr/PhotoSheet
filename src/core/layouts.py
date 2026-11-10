@@ -84,8 +84,8 @@ class Layout:
 
 @dataclass
 class NUp(Layout):
-    rows: int = 2
-    cols: int = 2
+    rows: int = 3
+    cols: int = 3
     hgutter: float = 8.0
     vgutter: float = 8.0
     caption: str = "none"      # none | filename | number | both: a contact-sheet line under each photo
@@ -1533,9 +1533,14 @@ class Fan(Layout):
 
 @dataclass
 class Brick(Layout):
-    """Staggered tiles like brickwork: every other row is shifted by half a tile and has one tile fewer."""
-    columns: int = 3
-    rows: int = 4
+    """Brickwork that fills the page edge to edge.
+
+    Even rows have `columns` whole tiles. Every other row is shifted by half a tile: it starts and ends with a
+    half-width tile, with `columns - 1` whole tiles between, so it reaches both edges of the page too. A photo in a
+    half tile is cropped to that half. Photos fill the tiles row by row.
+    """
+    columns: int = 5
+    rows: int = 5
     gutter: float = 6.0
 
     def __post_init__(self):
@@ -1545,11 +1550,17 @@ class Brick(Layout):
     def _rects(self) -> list[Rect]:
         p, g, c, r = self.page, self.gutter, self.columns, self.rows
         tw, th = (p.imageable_w - g * (c - 1)) / c, (p.imageable_h - g * (r - 1)) / r
+        half = max(1.0, (tw - g) / 2)           # keeps the gutter the same width beside a half tile
         out = []
         for row in range(r):
-            shift = (tw + g) / 2 if row % 2 else 0.0
-            for col in range(c - (row % 2)):
-                out.append(Rect(p.left + shift + col * (tw + g), p.top + row * (th + g), tw, th))
+            y = p.top + row * (th + g)
+            if row % 2 == 0:
+                out += [Rect(p.left + col * (tw + g), y, tw, th) for col in range(c)]
+            else:
+                shift = (tw + g) / 2
+                out.append(Rect(p.left, y, half, th))
+                out += [Rect(p.left + shift + col * (tw + g), y, tw, th) for col in range(c - 1)]
+                out.append(Rect(p.left + p.imageable_w - half, y, half, th))
         return out
 
     @property

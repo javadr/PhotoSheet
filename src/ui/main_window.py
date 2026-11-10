@@ -6,13 +6,13 @@ import datetime
 import random
 
 from PIL import Image
-from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QSize, QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox, QPushButton, QScrollArea, QSpinBox,
-    QSlider, QToolButton, QVBoxLayout, QWidget,
+    QFrame, QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
 from ..core import preset
@@ -52,6 +52,10 @@ SHAPE_LABELS = {"Heart": "heart", "Star": "star", "Diamond": "diamond", "Triangl
                 "Rounded square": "rounded", "Circle": "circle"}
 assert set(SHAPE_LABELS.values()) == set(SHAPE_NAMES)
 HANDLE = 5   # half the size of a Collage resize handle, in px
+# The grid each layout starts with: (rows, columns). Masonry only uses the columns.
+# Layouts that start on landscape paper (every other layout starts on portrait) until the user picks an orientation.
+ORIENT_DEFAULTS = {"Brick": "Landscape"}
+GRID_DEFAULTS = {"N-up": (3, 3), "Polaroid": (3, 3), "Shapes": (3, 2), "Masonry": (3, 3), "Brick": (5, 5)}
 DIRECTIONS = {"Automatic": "auto", "Vertical": "vertical", "Horizontal": "horizontal"}   # which way strips run
 SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
                 "Wallet 2.5 × 3.5 in": (63.5, 88.9), "4 × 6 in": (101.6, 152.4),
@@ -210,6 +214,108 @@ class SliderSpin(QWidget):
         """What a screen reader announces for the two controls."""
         self.slider.setAccessibleName(f"{label} slider")
         self.spin.setAccessibleName(label)
+
+
+class _Edge(QFrame):
+    """A one-pixel line that marks the edge of a scrolling area: only shown while there is more content that way."""
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedHeight(1)
+        self.setAutoFillBackground(True)
+        self.setBackgroundRole(QPalette.ColorRole.Mid)   # paints with Mid, but the colour is worked out from Window
+        self.hide()
+        self._recolor()
+
+    def _recolor(self):
+        want = desk_color(self.palette().color(QPalette.ColorRole.Window))
+        if self.palette().color(QPalette.ColorRole.Mid) != want:   # setPalette fires PaletteChange again: stop there
+            pal = self.palette()
+            pal.setColor(QPalette.ColorRole.Mid, want)
+            self.setPalette(pal)
+
+    def changeEvent(self, ev):
+        if ev.type() == QEvent.Type.PaletteChange:
+            self._recolor()
+        super().changeEvent(ev)
+
+
+class ScrollPane(QWidget):
+    """Content that scrolls vertically when its panel is too short for it (HIG scroll views: support the usual
+    scrolling, and make it apparent when content continues). A thin line shows at the top and bottom edge only
+    while there is more content in that direction. Focus moving to a control scrolls it into view."""
+
+    def __init__(self, content: QWidget, min_height: int = 110):
+        super().__init__()
+        self.content = content
+        self.area = QScrollArea()
+        self.area.setWidget(content)
+        self.area.setWidgetResizable(True)
+        self.area.setFrameShape(QFrame.Shape.NoFrame)
+        self.area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.area.setMinimumHeight(min_height)
+        self.top, self.bottom = _Edge(), _Edge()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self.top)
+        lay.addWidget(self.area, 1)
+        lay.addWidget(self.bottom)
+        bar = self.area.verticalScrollBar()
+        bar.valueChanged.connect(self._edges)
+        bar.rangeChanged.connect(self._edges)
+        # Qt scrolls to a control on Tab only; assistive technology and voice control move focus directly.
+        QApplication.instance().focusChanged.connect(self._reveal)
+
+    def _reveal(self, _old, new):
+        if new is not None and self.content.isAncestorOf(new):
+            self.area.ensureWidgetVisible(new, 0, 12)
+
+    def _edges(self, *_):
+        bar = self.area.verticalScrollBar()
+        self.top.setVisible(bar.value() > bar.minimum())
+        self.bottom.setVisible(bar.value() < bar.maximum())
+
+    def fit_width(self):
+        """Wide enough for the content and a vertical scroll bar, so the bar never covers a control."""
+        lay = self.content.layout()
+        if lay:
+            lay.invalidate()
+            lay.activate()
+        self.area.setMinimumWidth(self.content.sizeHint().width() + self.area.verticalScrollBar().sizeHint().width() + 4)
+
+    def scroll_to_top(self):
+        self.area.verticalScrollBar().setValue(0)
+
+
+class _LabelGroup:
+    """Gives every form label in a group the width of the widest, so separate forms (the pinned and the scrolling
+    part of a panel) line their fields up, and the column does not change width when the layout does."""
+
+    def __init__(self):
+        self.labels: list[QLabel] = []
+
+    def width(self) -> int:
+        return max((QLabel.sizeHint(l).width() for l in self.labels), default=0)
+
+    def label(self, text: str) -> QLabel:
+        lab = _GroupLabel(text, self)
+        self.labels.append(lab)
+        return lab
+
+
+class _GroupLabel(QLabel):
+    def __init__(self, text: str, group: _LabelGroup):
+        super().__init__(text)
+        self._group = group
+
+    def sizeHint(self) -> QSize:
+        s = super().sizeHint()
+        return QSize(max(s.width(), self._group.width()), s.height())
+
+    def minimumSizeHint(self) -> QSize:
+        s = super().minimumSizeHint()
+        return QSize(max(s.width(), self._group.width()), s.height())
 
 
 class _PageLabel(QLabel):
@@ -393,7 +499,11 @@ class MainWindow(QMainWindow):
         self.per_sheet = QLabel("")
         self._last_kind = "N-up"
         self.margin = self._spin(0, 200, 18)
-        self.rows, self.cols = self._spin(1, 20, 2), self._spin(1, 20, 2)
+        self.rows, self.cols = self._spin(1, 20, 3), self._spin(1, 20, 3)
+        self._grid_touched = False   # until the user edits Rows or Columns, each layout starts with its own grid
+        self._orient_touched = False  # likewise for Orientation: until it is chosen, each layout uses its own default
+        self._orient_setting = False
+        self._grid_setting = False
         self.gutter = self._spin(0, 100, 8)
         self.segments, self.overlap = self._spin(1, 64, 4), SliderSpin(0, 180, 30, "°")
         self.angle, self.inner = self._spin(-360, 360, 0), self._spin(0, 400, 0)
@@ -472,9 +582,13 @@ class MainWindow(QMainWindow):
         self.collage_hint = QLabel("Drag a photo to move it, drag a corner\nto resize (Shift = free shape).")
         self.strip_w, self.strip_h = self._dspin(20, 400, 51), self._dspin(40, 600, 152)
         self.crop = QCheckBox("Crop all images to fill")
+        self.crop.setChecked(True)
         self.crop.setToolTip("With this on, drag a photo on the page to reposition it inside its frame.\n"
                              "Hold Shift while dragging to swap two photos instead.")
-        form = QFormLayout()
+        form = QFormLayout()      # the layout's own options: this part scrolls
+        pinned = QFormLayout()    # layout, page, orientation, margin: always in view
+        labels = _LabelGroup()
+        pinned_widgets = (self.kind, self.page_size, self.orient, self.margin)
         self.rowsof = {}
         for key, label, w in [
             ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Orientation", self.orient), ("all", "Margin (pt)", self.margin),
@@ -511,7 +625,7 @@ class MainWindow(QMainWindow):
             ("timeline", "Photos per page", self.tl_n), ("timeline", "", self.tl_dates),
             ("all", "", self.crop),
         ]:
-            form.addRow(label, w)
+            (pinned if any(w is x for x in pinned_widgets) else form).addRow(labels.label(label), w)
             if isinstance(w, SliderSpin):
                 w.set_label(label)
             self.rowsof.setdefault(key, []).append(w)
@@ -522,11 +636,29 @@ class MainWindow(QMainWindow):
             w_changed.connect(self._layout_changed)
             if w in (self.cell_w, self.cell_h):
                 w_changed.connect(self._size_edited)
+        side = self.style().pixelMetric(QStyle.PixelMetric.PM_LayoutLeftMargin)   # the style's own panel margin
+        pinned.setContentsMargins(side, 6, side, 0)
+        form.setContentsMargins(side, 6, side, 6)
+        options = QWidget()
+        options.setLayout(form)
+        head = QWidget()
+        head.setLayout(pinned)
+        self._pinned_form, self._pinned_side = pinned, side
+        self.layout_pane = ScrollPane(options)
         box = QWidget()
-        box.setLayout(form)
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(head)
+        lay.addWidget(self.layout_pane, 1)
+        self.layout_pane.area.verticalScrollBar().rangeChanged.connect(self._align_pinned)
         self.layout_dock = QDockWidget("Layout", self)
         self.layout_dock.setWidget(box)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.layout_dock)
+        self.orient.currentIndexChanged.connect(self._touch_orient)
+        self.rows.valueChanged.connect(self._touch_grid)
+        self.cols.valueChanged.connect(self._touch_grid)
+        self._scrolled_kind = None
         self._show_kind_rows()
 
     def _build_image_dock(self):
@@ -554,16 +686,23 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.addWidget(add)
         row.addWidget(rem)
+        fx = QWidget()
+        fxl = QVBoxLayout(fx)
+        fxl.setContentsMargins(0, 0, 0, 0)
+        fxl.addWidget(self.fx_hint)
+        fxl.addLayout(form)
+        self.fx_pane = ScrollPane(fx, min_height=90)
+        self.list.setMinimumHeight(90)
         lay = QVBoxLayout()
-        lay.addWidget(self.list)
+        lay.addWidget(self.list, 1)
         lay.addLayout(row)
-        lay.addWidget(self.fx_hint)
-        lay.addLayout(form)
+        lay.addWidget(self.fx_pane)
         box = QWidget()
         box.setLayout(lay)
         self.image_dock = QDockWidget("Images", self)
         self.image_dock.setWidget(box)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.image_dock)
+        self.fx_pane.fit_width()
         self._load_effects()
 
     @staticmethod
@@ -580,6 +719,14 @@ class MainWindow(QMainWindow):
                 sp.setValue(v)
                 sp.blockSignals(False)
         self._layout_changed()
+
+    def _touch_orient(self, *_):
+        if not self._orient_setting:
+            self._orient_touched = True
+
+    def _touch_grid(self, *_):
+        if not self._grid_setting:
+            self._grid_touched = True
 
     def _recipe_key(self) -> str:
         return list(RECIPES)[self.recipe.currentIndex()]
@@ -611,6 +758,14 @@ class MainWindow(QMainWindow):
         return s
 
     # ---- layout state ----
+    def _align_pinned(self, *_):
+        """Keep the pinned fields' right edge level with the scrolling ones: leave room for the scroll bar while it shows."""
+        bar = self.layout_pane.area.verticalScrollBar()
+        m = self._pinned_form.contentsMargins()
+        right = self._pinned_side + (bar.sizeHint().width() if bar.maximum() > bar.minimum() else 0)
+        if m.right() != right:
+            self._pinned_form.setContentsMargins(m.left(), m.top(), right, m.bottom())
+
     def _show_kind_rows(self):
         k = KEYS[self.kind.currentText()]
         for key, widgets in self.rowsof.items():
@@ -619,6 +774,10 @@ class MainWindow(QMainWindow):
                 if w is self.per_sheet:   # a readout with nothing to say takes no room (no label with a blank value)
                     visible = visible and bool(self.per_sheet.text())
                 w.parentWidget().layout().setRowVisible(w, visible)
+        self.layout_pane.fit_width()
+        if self._scrolled_kind != k:                       # a different layout starts at the top of its options
+            self._scrolled_kind = k
+            self.layout_pane.scroll_to_top()
 
     def _layout_changed(self, *_):
         if self._loading:
@@ -626,6 +785,13 @@ class MainWindow(QMainWindow):
         self._show_kind_rows()
         old = self.layout_
         cls = KINDS[self.kind.currentText()]
+        want = ORIENT_DEFAULTS.get(self.kind.currentText(), "Portrait")
+        if self.kind.currentText() != self._last_kind and not self._orient_touched and self.orient.currentText() != want:
+            self._orient_setting = True                    # nobody chose an orientation yet: this layout's own default
+            self.orient.blockSignals(True)
+            self.orient.setCurrentText(want)
+            self.orient.blockSignals(False)
+            self._orient_setting = False
         pw, ph = PAGES[self.page_size.currentText()]
         if self.orient.currentText() == "Landscape":
             pw, ph = ph, pw
@@ -646,6 +812,13 @@ class MainWindow(QMainWindow):
                 sp.blockSignals(True)
                 sp.setValue(v)
                 sp.blockSignals(False)
+        if kind != self._last_kind and kind in GRID_DEFAULTS and not self._grid_touched:
+            self._grid_setting = True                      # the user has not chosen a grid yet: use this layout's own
+            for sp, v in zip((self.rows, self.cols), GRID_DEFAULTS[kind]):
+                sp.blockSignals(True)
+                sp.setValue(v)
+                sp.blockSignals(False)
+            self._grid_setting = False
         self._last_kind = kind
         m = self.margin.value()
         if not page.set_margins(m, m, m, m):

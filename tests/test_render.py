@@ -563,7 +563,10 @@ def test_brick_and_timeline_render(tmp_path, red):
     for _, r in b.slots(0):
         assert im.getpixel((int(r.x + r.w / 2), int(r.y + r.h / 2))) == (255, 0, 0)
     r0, r1 = b.slots(0)[0][1], b.slots(0)[3][1]
-    assert im.getpixel((int(r0.x + 2), int(r1.y + r1.h / 2))) == (255, 255, 255)          # the half-tile gap at the start of an odd row
+    assert r1.w < r0.w * 0.6 and abs(r1.x - r0.x) < 1e-9                                   # an odd row starts with a half tile at the edge...
+    assert im.getpixel((int(r1.x + 2), int(r1.y + r1.h / 2))) == (255, 0, 0)               # ...and it is filled with photo, not a gap
+    last = max((r for _, r in b.slots(0) if abs(r.y - r1.y) < 1e-9), key=lambda r: r.x)
+    assert abs(last.x + last.w - 300) < 1e-9 and im.getpixel((int(last.x + last.w - 3), int(last.y + last.h / 2))) == (255, 0, 0)   # right edge too
     jp = []
     for i in range(3):
         p = tmp_path / f"t{i}.jpg"
@@ -604,3 +607,38 @@ def test_cli_and_presets_for_slant_fan_brick_timeline(red, tmp_path):
         preset.save(lay, f)
         back = preset.load(f)
         assert type(back) is type(lay) and back == lay
+
+
+def test_cli_grid_defaults_follow_each_layout_unless_rows_and_cols_are_given(red, tmp_path):
+    import subprocess
+    import sys
+
+    def pages(layout, n, *extra):
+        d = tmp_path / f"{layout}{len(extra)}{n}"
+        d.mkdir()
+        subprocess.run([sys.executable, "-m", "src.cli", *([red] * n), "-o", str(d / "g.png"), "--layout", layout, "--dpi", "20", *extra],
+                       check=True, capture_output=True)
+        return len(list(d.glob("g*.png")))   # one page is saved as g.png, several as g-1.png, g-2.png ...
+    assert pages("nup", 30) == 4                                  # 3 x 3 = 9 per page: 30 photos = 4 pages
+    assert pages("nup", 30, "--rows", "5", "--cols", "5") == 2    # asked for 5 x 5 = 25 per page
+    assert pages("brick", 40) == 2                                # Brick starts at 5 x 5 = 27 per page (half tiles at the row ends)
+    assert pages("brick", 40, "--rows", "2", "--cols", "3") > 2
+    assert pages("shapes", 13) == 3                               # Shapes 3 x 2 = 6 per page
+    assert pages("masonry", 3) == 1 and pages("polaroid", 10) == 2
+
+
+def test_cli_brick_defaults_to_landscape_paper_unless_asked_otherwise(red, tmp_path):
+    import subprocess
+    import sys
+
+    def size(*extra):
+        out = tmp_path / f"b{len(extra)}{''.join(extra).replace('-', '')}.png"
+        subprocess.run([sys.executable, "-m", "src.cli", red, "-o", str(out), "--dpi", "36", *extra], check=True, capture_output=True)
+        return Image.open(out).size
+    portrait, landscape = (298, 421), (421, 298)                       # A4 at 36 dpi
+    assert size("--layout", "brick") == landscape                     # Brick starts on landscape paper
+    assert size("--layout", "brick", "--portrait") == portrait
+    assert size("--layout", "brick", "--landscape") == landscape      # asking for landscape still works
+    assert size("--layout", "nup") == portrait                        # every other layout is unchanged
+    assert size("--layout", "nup", "--landscape") == landscape
+    assert size("--layout", "shapes") == portrait and size("--layout", "masonry") == portrait

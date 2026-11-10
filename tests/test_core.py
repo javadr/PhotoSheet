@@ -790,24 +790,41 @@ def test_fan_cards_pivot_symmetrically_fill_the_page_and_the_last_card_is_on_top
             Fan(**bad)
 
 
-def test_brick_rows_are_staggered_and_never_overlap():
+def test_brick_rows_are_staggered_with_half_tiles_so_every_row_fills_the_page_width():
     from photosheet.core.layouts import Brick
     pg = PageExtent(400, 600)
     b = Brick(page=pg, columns=3, rows=4, gutter=10)
-    assert b.per_page == 3 + 2 + 3 + 2                                               # odd rows have one tile fewer
-    for i in range(12):
+    assert b.per_page == 3 + 4 + 3 + 4                                               # odd rows: half, 2 whole, half
+    for i in range(16):
         b.add(ImageItem(f"{i}.jpg"))
-    assert b.pages == 2 and len(b.slots(0)) == 10 and len(b.slots(1)) == 2
+    assert b.pages == 2 and len(b.slots(0)) == 14 and len(b.slots(1)) == 2
     rects = [r for _, r in b.slots(0)]
-    assert _rects_disjoint(rects) and len({(round(r.w, 6), round(r.h, 6)) for r in rects}) == 1   # equal tiles
-    row0, row1 = rects[:3], rects[3:5]
-    assert row0[0].x == 0 and abs(row1[0].x - (row0[0].w + 10) / 2) < 1e-9           # the second row is shifted half a tile
-    assert row1[0].x > row0[0].x and row1[0].x + row1[0].w < row0[1].x + row0[1].w   # and each of its tiles sits between two above
-    assert all(r.x >= -1e-6 and r.x + r.w <= 400 + 1e-6 and r.y + r.h <= 600 + 1e-6 for r in rects)
-    assert abs(rects[0].y) < 1e-9 and abs(rects[-1].y + rects[-1].h - 600) < 1e-6    # the rows fill the page height
+    assert _rects_disjoint(rects)
+    rows = {}
+    for r in rects:
+        rows.setdefault(round(r.y, 6), []).append(r)
+    assert [len(v) for v in rows.values()] == [3, 4, 3, 4]
+    for k, row in enumerate(rows.values()):
+        row.sort(key=lambda r: r.x)
+        assert abs(row[0].x) < 1e-9 and abs(row[-1].x + row[-1].w - 400) < 1e-9, k   # every row reaches both page edges
+        assert all(abs((b2.x - (a.x + a.w)) - 10) < 1e-9 for a, b2 in zip(row, row[1:])), k   # gutters are even, half tiles too
+    whole = rows[min(rows)][0].w
+    for k in (1, 3):                                                                  # the shifted rows
+        row = rows[sorted(rows)[k]]
+        halves = (row[0], row[-1])
+        assert all(abs(h.w - (whole - 10) / 2) < 1e-9 for h in halves)                # half tiles: half a whole tile less half a gutter
+        assert all(abs(m.w - whole) < 1e-9 for m in row[1:-1])
+        assert abs((row[1].x + row[1].w / 2) - (rows[min(rows)][0].x + rows[min(rows)][0].w + 5)) < 1e-9   # whole tiles sit across the seam above
+    assert all(abs(r.h - rects[0].h) < 1e-9 for r in rects)
+    assert abs(rects[0].y) < 1e-9 and abs(rects[-1].y + rects[-1].h - 600) < 1e-6    # and the rows fill the page height
+    assert Brick(page=pg, columns=2, rows=2, gutter=8).per_page == 5                  # the smallest brick: 2 + (half, 1, half)
+    assert Brick().columns == 5 and Brick().rows == 5
+    huge = Brick(page=pg, columns=5, rows=2, gutter=300)                              # a gutter wider than a tile cannot go negative
+    assert all(r.w >= 1 and r.h >= 1 for _, r in huge.slots(0)) or huge.slots(0) == []
     for bad in (dict(columns=1), dict(rows=0), dict(gutter=-1)):
         with pytest.raises(ValueError):
             Brick(**bad)
+
 
 
 def test_exif_dates_read_format_fall_back_and_sort(tmp_path):

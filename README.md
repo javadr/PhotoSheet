@@ -12,7 +12,7 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 
 | Layout | What it is for |
 |---|---|
-| **N-up** | A grid of rows × columns. Optional contact-sheet captions (filename and/or number) and cut marks. |
+| **N-up** | A grid of rows × columns, 3 × 3 to start with (change it in the Layout panel). Optional contact-sheet captions (filename and/or number) and cut marks. |
 | **Single** | One photo per page. |
 | **Poster** | One photo tiled across several pages, with overlap. |
 | **Carousel** | A circular montage with one wedge per photo. |
@@ -38,17 +38,21 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 | **Scatter** | A casual pile of tilted prints on white cards with soft shadows; the seed makes the same pile every time. |
 | **Slant** | Diagonal parallelogram panels side by side, each photo cut to its slanted shape; lean left or right. |
 | **Fan** | Cards fanned out like a hand of playing cards, the last on top. Suits landscape paper best. |
-| **Brick** | Staggered tiles like brickwork: every other row is shifted half a tile. |
+| **Brick** | Brickwork that fills the page edge to edge: every other row is shifted half a tile and starts and ends with a half-width photo. Starts at 5 × 5 on landscape paper (change the Orientation, or use `--portrait`). |
 | **Timeline** | Photos alternate either side of a line, each with its date from the photo's own data. Use Edit ▸ Sort Photos by Date to put them in order. |
 
 **Working with the page**
 
 - Live preview that fits the window. Zoom with `Ctrl` + mouse wheel, `Ctrl` + `+` / `-`, or `Ctrl+0` to fit.
-- Drag a photo on the page onto another to swap them. With *Crop all images to fill* on, dragging
-  repositions the photo inside its frame instead (hold `Shift` to swap). Works on Carousel wedges too.
+- *Crop all images to fill* is on to start with. While it is on, dragging a photo on the page repositions it inside its
+  frame, and holding `Shift` while dragging swaps two photos. With it off, a plain drag swaps. Works on Carousel wedges too.
 - In a **Collage**, drag a photo to move it and drag a corner to resize it. It snaps to the page edges, the centre
   and other photos (hold `Ctrl` to turn snapping off, `Shift` for a free shape).
 - Angles and percentages are sliders with an exact number beside them; the preview updates as you drag.
+- The Layout and Images panels fit short windows and small screens: the page settings (layout, page, orientation,
+  margin) and the photo list stay in view, and the options below them scroll. A thin line at the top or bottom of the
+  options marks where there is more, and Tab scrolls to the control you reach. The layout menu is grouped under
+  five headings (Grids, Print sizes, Frames, Shapes, Creative).
 - Undo and redo for adding, removing, reordering, moving and effect changes.
 - Drop image files onto the window to add them.
 - Paper sizes A4, Letter, A5, 4 × 6 in and 5 × 7 in, in portrait or landscape.
@@ -88,7 +92,7 @@ Render a sheet without opening the window:
 photosheet-cli me.jpg -o passport.pdf --layout passport --page 4x6 --landscape --margin 4 --crop
 
 # A4 contact sheet, 4 x 5, with filenames and numbers
-photosheet-cli photos/*.jpg -o contact.pdf --layout nup --rows 5 --cols 4 --caption both
+photosheet-cli photos/*.jpg -o contact.pdf --layout nup --rows 5 --cols 4 --caption both   # without --rows/--cols, N-up is 3 x 3
 
 # Photo-booth strips with 4 frames each
 photosheet-cli photos/*.jpg -o strips.pdf --layout strip --frames 4
@@ -101,6 +105,9 @@ photosheet-cli photos/*.jpg -o calendar.pdf --layout calendar --year 2027 --crop
 
 # A timeline of a trip, dates taken from the photos (sort them first in the app, or name them in order)
 photosheet-cli photos/*.jpg -o timeline.pdf --layout timeline --timeline-photos 6
+
+# Brickwork that fills the page, 5 rows by 5 columns
+photosheet-cli photos/*.jpg -o brick.pdf --layout brick --rows 5 --cols 5   # landscape by default; --portrait for upright paper
 
 # Slanted panels, a fan of cards on landscape paper
 photosheet-cli photos/*.jpg -o slant.pdf --layout slant --panels 5 --slant 14
