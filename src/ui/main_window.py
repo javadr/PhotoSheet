@@ -630,6 +630,7 @@ class MainWindow(QMainWindow):
         self._grid_setting = False
         self.gutter = self._spin(0, 100, 8)
         self.segments, self.overlap = self._spin(1, 64, 4), SliderSpin(0, 180, 30, "°")
+        self.feather = SliderSpin(0, 100, 0, " pt")
         self.angle, self.inner = self._spin(-360, 360, 0), self._spin(0, 400, 0)
         self.poster_w, self.poster_h = self._spin(1, 400, 16), self._spin(1, 400, 12)
         self.size_preset = QComboBox()
@@ -725,7 +726,7 @@ class MainWindow(QMainWindow):
             ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,feature,bento,spiral,honeycomb,calendar,masonry,shapes,ring,brick,checker,slant,timeline", "Gutter (pt)", self.gutter),
             ("nup,polaroid,framed", "Captions", self.caption),
             ("nup,fixed,passport,polaroid,package,badges,honeycomb,ring", "", self.marks),
-            ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap),
+            ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap), ("nup,single,fixed,passport,carousel,mosaic,strip,polaroid,package,collage,framed,badges,feature,filmstrip,bento,spiral,honeycomb,calendar,masonry,shapes,ring,scatter,slant,fan,timeline,brick,checker,stairs", "Feather (pt)", self.feather),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
             ("fixed,passport", "Print size", self.size_preset), ("fixed,passport", "Width (mm)", self.cell_w),
@@ -1046,7 +1047,7 @@ class MainWindow(QMainWindow):
             kw = dict(year=self.cal_year.value(), month=self.cal_month.currentIndex() + 1, months=self.cal_months.value(),
                       week_start=self.cal_week.currentText().lower(), photo_share=self.cal_share.value() / 100,
                       gutter=self.gutter.value())
-        self.layout_ = cls(page=page, **kw)
+        self.layout_ = cls(page=page, feather=self.feather.value() if cls not in (Poster, Triptych) else 0, **kw)
         for it in old.images:
             it.crop = self.crop.isChecked()
             self.layout_.add(it)
@@ -1108,7 +1109,7 @@ class MainWindow(QMainWindow):
         for attr, w in [("rows", self.rows), ("cols", self.cols), ("hgutter", self.gutter),
                         ("gutter", self.gutter), ("gap", self.gutter), ("panels", self.panels), ("border", self.border),
                         ("mat", self.mat), ("thumbs", self.thumbs), ("columns", self.cols),
-                        ("frames", self.frames), ("segments", self.segments), ("overlap", self.overlap),
+                        ("frames", self.frames), ("segments", self.segments), ("overlap", self.overlap), ("feather", self.feather),
                         ("angle_offset", self.angle), ("inner_radius", self.inner)]:
             if hasattr(lay, attr):
                 w.setValue(int(getattr(lay, attr)))

@@ -642,3 +642,29 @@ def test_cli_brick_defaults_to_landscape_paper_unless_asked_otherwise(red, tmp_p
     assert size("--layout", "nup") == portrait                        # every other layout is unchanged
     assert size("--layout", "nup", "--landscape") == landscape
     assert size("--layout", "shapes") == portrait and size("--layout", "masonry") == portrait
+
+
+def test_carousel_feather_fades_the_overlap_and_round_trips(red, tmp_path):
+    from PIL import Image
+    from photosheet.core.layouts import Carousel
+    from photosheet.core.preset import from_dict, to_dict
+    blue = tmp_path / "b.png"
+    Image.new("RGB", (50, 50), (0, 0, 255)).save(blue)
+    c = Carousel(page=PageExtent(200, 200), segments=2, overlap=60, feather=20)
+    c.add(ImageItem(red))
+    c.add(ImageItem(str(blue)))
+    px = render_page(c, 0, dpi=72).getpixel((100, 100 - 40))   # on the seam between the two wedges
+    assert 0 < px[0] < 255 and 0 < px[2] < 255                 # a mix of red and blue
+    assert from_dict(to_dict(c)).feather == 20
+
+
+def test_feather_softens_edges_in_every_overlapping_layout(red):
+    from photosheet.core.layouts import Badges, Bento, Collage, Fan, Mosaic, NUp, Scatter, Stairs
+    for cls in (Collage, Scatter, Fan, Stairs, NUp, Mosaic, Bento, Badges):
+        def dark_edge(feather):
+            lay = cls(page=PageExtent(300, 300), feather=feather)
+            lay.add(ImageItem(red))
+            lay.add(ImageItem(red))
+            im = render_page(lay, 0, dpi=72)
+            return sum(n for n, p in im.getcolors(10**6) if p not in ((255, 0, 0), (255, 255, 255)) and p[0] > 200 and p[1] > 0)
+        assert dark_edge(20) > dark_edge(0), cls.__name__   # more blended edge pixels (red mixed with the paper)

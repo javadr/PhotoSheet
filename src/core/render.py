@@ -176,15 +176,25 @@ def _mask(shape: str, w: int, h: int) -> Image.Image:
     return m.resize((w, h), Image.LANCZOS)
 
 
+def _fade(mask: Image.Image, radius: float) -> Image.Image:
+    """Soften a mask's edge, including edges at the image border (padded first: a blur would otherwise keep them hard)."""
+    if radius <= 0:
+        return mask
+    p = math.ceil(radius * 2)
+    big = Image.new("L", (mask.width + 2 * p, mask.height + 2 * p), 0)
+    big.paste(mask, (p, p))
+    return big.filter(ImageFilter.GaussianBlur(radius)).crop((p, p, p + mask.width, p + mask.height))
+
+
 def _place_cut(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, poly: list, s: float, fast: bool,
-               background) -> None:
+               background, feather: float = 0.0) -> None:
     """A photo filling `slot`, cut to the polygon `poly` (page points) and pasted onto the canvas."""
     w, h = max(1, round(slot.w * s)), max(1, round(slot.h * s))
     tmp = Image.new("RGB", (w, h), background)
     _place(tmp, replace(item, crop=True, rotation=0, mask=None), im, Rect(0, 0, slot.w, slot.h), s, fast)
     m = Image.new("L", (w * 4, h * 4), 0)
     ImageDraw.Draw(m).polygon([((x - slot.x) * s * 4, (y - slot.y) * s * 4) for x, y in poly], fill=255)
-    canvas.paste(tmp, (round(slot.x * s), round(slot.y * s)), m.resize((w, h), Image.LANCZOS))
+    canvas.paste(tmp, (round(slot.x * s), round(slot.y * s)), _fade(m.resize((w, h), Image.LANCZOS), feather * s / 2))
 
 
 def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s: float,
@@ -299,12 +309,16 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
                    Rect(photo.x - card.x, photo.y - card.y, photo.w, photo.h), s, fast)
             c = c.convert("RGBA")
             c.putalpha(Image.new("L", (w, h), 255))
-            c = c.rotate(angle, expand=True, resample=Image.BICUBIC)
-            shadow = Image.new("RGBA", c.size, (0, 0, 0, 0))
-            shadow.putalpha(c.getchannel("A").point(lambda v: v * 90 // 255).filter(ImageFilter.GaussianBlur(max(1, 2.5 * s))))
+            c = c.rotate(angle, expand=True, resample=Image.BICUBIC, fillcolor=(255, 255, 255, 0))   # white, so a soft edge has no dark fringe
             x, y = round((card.x + card.w / 2) * s - c.width / 2), round((card.y + card.h / 2) * s - c.height / 2)
-            off = round(2 * s)
-            canvas.paste(shadow, (x + off, y + off + off), shadow)
+            if not layout.feather:   # a soft-edged card blends into its neighbours, so it casts no shadow
+                pad, off = round(8 * s), round(2 * s)   # room for the blur, so the shadow is not cut off at the card's box
+                sa = Image.new("L", (c.width + 2 * pad, c.height + 2 * pad), 0)
+                sa.paste(c.getchannel("A").point(lambda v: v * 90 // 255), (pad, pad))
+                sa = sa.filter(ImageFilter.GaussianBlur(max(1, 2.5 * s)))
+                canvas.paste((0, 0, 0), (x - pad + off, y - pad + 2 * off), sa)
+            else:
+                c.putalpha(_fade(c.getchannel("A"), layout.feather * s / 2))
             canvas.paste(c, (x, y), c)
         return canvas
     if isinstance(layout, Carousel):
@@ -319,7 +333,7 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
             _place(tmp, replace(item, crop=True, rotation=0, mask=None), load(item, printer_profile, fast), box, s, fast)
             mask = Image.new("L", canvas.size, 0)
             ImageDraw.Draw(mask).polygon([(x * s, y * s) for x, y in poly], fill=255)
-            canvas.paste(tmp, mask=mask)
+            canvas.paste(tmp, mask=_fade(mask, layout.feather * s / 2))
         return canvas
     draw = ImageDraw.Draw(canvas)
     round_photos = layout.shape != "rect"
@@ -342,10 +356,11 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
             check()
             placed(k, len(slots))
             w, h = max(1, round(r.w * s)), max(1, round(r.h * s))
-            tmp = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            tmp = Image.new("RGBA", (w, h), (255, 255, 255, 0))
             _place(tmp, item, load(item, printer_profile, fast), Rect(0, 0, r.w, r.h), s, fast)
             if angle:
-                tmp = tmp.rotate(-angle, Image.BICUBIC, expand=True)   # PIL turns counter-clockwise
+                tmp = tmp.rotate(-angle, Image.BICUBIC, expand=True, fillcolor=(255, 255, 255, 0))   # PIL turns counter-clockwise
+            tmp.putalpha(_fade(tmp.getchannel("A"), layout.feather * s / 2))
             canvas.paste(tmp, (round((r.x + r.w / 2) * s - tmp.width / 2), round((r.y + r.h / 2) * s - tmp.height / 2)), tmp)
         return canvas
     polys = layout.outlines(page)
@@ -356,10 +371,18 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         check()
         placed(k, len(slots))
         if polys is not None and k < len(polys):
-            _place_cut(canvas, item, load(item, printer_profile, fast), slot, polys[k], s, fast, background)
+            _place_cut(canvas, item, load(item, printer_profile, fast), slot, polys[k], s, fast, background, layout.feather)
             continue
         if round_photos:
             item = replace(item, crop=True)   # a circle is always filled
+        if layout.feather:   # draw on a transparent tile, soften its edge, then lay it over what is already there
+            w, h = max(1, round(slot.w * s)), max(1, round(slot.h * s))
+            tile = Image.new("RGBA", (w, h), (255, 255, 255, 0))   # white, not black: a soft edge must not pick up a dark fringe
+            _place(tile, item, load(item, printer_profile, fast), Rect(0, 0, slot.w, slot.h), s, fast,
+                   shape=layout.shape if round_photos else None)
+            tile.putalpha(_fade(tile.getchannel("A"), layout.feather * s / 2))
+            canvas.paste(tile, (round(slot.x * s), round(slot.y * s)), tile)
+            continue
         _place(canvas, item, load(item, printer_profile, fast), slot, s, fast, shape=layout.shape if round_photos else None)
     if round_photos:
         guides()   # a cut circle must show on top of the photo's edge

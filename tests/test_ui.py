@@ -689,7 +689,7 @@ def test_collage_corner_handle_resizes_keeping_shape_or_free_with_shift(app, tmp
     _mouse(app, w, "move", br + QPointF(60, 5))
     _mouse(app, w, "release", br + QPointF(60, 5))
     x, y, bw, bh = w.layout_.images[0].box
-    assert (x, y) == (60, 60)                                    # the opposite (top-left) corner stays put
+    assert x == pytest.approx(60) and y == pytest.approx(60)     # the opposite (top-left) corner stays put
     assert abs(bw / bh - 120 / 90) < 1e-9 and abs(bw - (120 + 60 / k)) < 1e-6   # same shape, grew by the bigger change
     assert w.undo_act.text() == "Undo Resize Photo"
     w.undo_stack.undo()

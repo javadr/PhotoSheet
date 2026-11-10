@@ -52,6 +52,7 @@ class Layout:
     page: PageExtent = field(default_factory=PageExtent)
     images: list[ImageItem] = field(default_factory=list)
     marks: bool = False   # draw crop marks at each photo's corners (layouts that support it)
+    feather: float = field(default=0.0, kw_only=True)   # points of soft fade at each photo's edge, so overlaps blend
 
     def add(self, item: ImageItem) -> None:
         self.images.append(item)

@@ -69,6 +69,8 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
   frame, and holding `Shift` while dragging swaps two photos. With it off, a plain drag swaps. Works on Carousel wedges too.
 - In a **Collage**, drag a photo to move it and drag a corner to resize it. It snaps to the page edges, the centre
   and other photos (hold `Ctrl` to turn snapping off, `Shift` for a free shape).
+- *Feather (pt)* softens every photo's edge so overlapping photos (Carousel, Collage, Scatter, Fan, Stairs) fade into each
+  one another; on other layouts it gives a soft vignette. It is off at 0, and Poster and Triptych do not have it.
 - Angles and percentages are sliders with an exact number beside them; the preview updates as you drag.
 - The Layout and Images panels fit short windows and small screens: the page settings (layout, page, orientation,
   margin) and the photo list stay in view, and the options below them scroll. A thin line at the top or bottom of the
