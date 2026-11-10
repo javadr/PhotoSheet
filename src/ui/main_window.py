@@ -23,7 +23,7 @@ from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Ben
                             Fan, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic,
                             NUp, Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral,
                             Strip, Timeline, Triptych, aspect, date_sort_key, snap_delta)
-from ..core.render import render_page, uncached
+from ..core.render import Cancelled, render_page, uncached
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
          "4 × 6 in": (288, 432), "5 × 7 in": (360, 504), "8 × 10 in": (576, 720)}   # portrait points; Orientation turns them
@@ -206,7 +206,7 @@ class _ExportJob(QRunnable):
             for i in range(n):
                 if self.cancelled:
                     return
-                pages.append(render_page(self.layout, i, 300))
+                pages.append(render_page(self.layout, i, 300, cancel=lambda: self.cancelled))
                 self.sig.export_progress.emit(i + 1, n)
             self.ready.wait()
             if self.cancelled:
@@ -219,6 +219,8 @@ class _ExportJob(QRunnable):
                 for i, im in enumerate(pages):
                     im.save(f"{stem}-{i + 1}.{ext}" if n > 1 else f, dpi=(300, 300))
             res = None
+        except Cancelled:
+            return
         except Exception as e:
             res = e
         try:

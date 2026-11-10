@@ -70,6 +70,10 @@ def load(item: ImageItem, printer_profile: str | None = None, proxy: bool = Fals
     return im
 
 
+class Cancelled(Exception):
+    """Raised inside render_page when its cancel() callback says stop."""
+
+
 def _try_load(item, printer_profile, fast):
     try:
         load(item, printer_profile, fast)
@@ -77,13 +81,15 @@ def _try_load(item, printer_profile, fast):
         pass  # the serial pass that follows raises it again, where it belongs
 
 
-def _prefetch(items, printer_profile, fast, progress=None) -> None:
+def _prefetch(items, printer_profile, fast, progress=None, cancel=None) -> None:
     """Decode and colour-manage the photos in parallel (Pillow and lcms release the GIL) so load() hits the cache.
     progress(done, total) is called from worker threads as each photo finishes."""
     todo = list({id(i): i for i in items}.values())
     done = [0]
 
     def one(item):
+        if cancel and cancel():
+            return   # queued photos are skipped; the ones already decoding finish
         _try_load(item, printer_profile, fast)
         done[0] += 1   # shortcut: unlocked counter, an off-by-one in a progress label is harmless
         if progress:
@@ -243,8 +249,14 @@ def _draw_shape(draw: ImageDraw.ImageDraw, kind: str, r: Rect, rgb: tuple, s: fl
 
 
 def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str | None = None,
-                background=(255, 255, 255), fast: bool = False, progress=None) -> Image.Image:
+                background=(255, 255, 255), fast: bool = False, progress=None, cancel=None) -> Image.Image:
     s = dpi / 72
+
+    def check():
+        if cancel and cancel():
+            raise Cancelled
+
+    check()
     p = layout.page
     canvas = Image.new("RGB", (round(p.width * s), round(p.height * s)), background)
     if not layout.images:
@@ -272,8 +284,10 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         return canvas
     if hasattr(layout, "pile"):   # Scatter and Fan: tilted cards with a shadow
         pile = layout.pile(page)
-        _prefetch([c[0] for c in pile], printer_profile, fast, progress)
+        _prefetch([c[0] for c in pile], printer_profile, fast, progress, cancel)
+        check()
         for item, photo, card, angle in pile:
+            check()
             w, h = max(1, round(card.w * s)), max(1, round(card.h * s))
             c = Image.new("RGB", (w, h), (255, 255, 255))
             _place(c, replace(item, crop=True, rotation=0), load(item, printer_profile, fast),
@@ -290,8 +304,10 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         return canvas
     if isinstance(layout, Carousel):
         wedges = layout.wedges()
-        _prefetch([w[0] for w in wedges], printer_profile, fast, progress)
+        _prefetch([w[0] for w in wedges], printer_profile, fast, progress, cancel)
+        check()
         for i in [*range(0, len(wedges), 2), *range(1, len(wedges), 2)]:  # evens, then odds on top
+            check()
             item, poly, box = wedges[i]
             tmp = Image.new("RGB", canvas.size, background)
             _place(tmp, replace(item, crop=True, rotation=0, mask=None), load(item, printer_profile, fast), box, s, fast)
@@ -315,8 +331,10 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
                        fill=(255, 255, 255), outline=(205, 205, 205), width=max(1, round(0.5 * s)))
     polys = layout.outlines(page)
     slots = layout.slots(page)
-    _prefetch([i for i, _ in slots], printer_profile, fast, progress)
+    _prefetch([i for i, _ in slots], printer_profile, fast, progress, cancel)
+    check()
     for k, (item, slot) in enumerate(slots):
+        check()
         if polys is not None and k < len(polys):
             _place_cut(canvas, item, load(item, printer_profile, fast), slot, polys[k], s, fast, background)
             continue
