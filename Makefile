@@ -61,6 +61,10 @@ install-desktop-file: ## Generate a desktop launcher for the GUI app
 install-dev: install-desktop-file ## Install photosheet locally in editable/development mode
 	@$(PKG_TOOL) install -e .
 
+.PHONY: pins
+pins: ver install-desktop-file ## Install the current version from PyPI (pinned), plus the desktop file
+	@$(PKG_TOOL) install $(if $(HAS_UV),--refresh) photosheet==$(VER)   # --refresh: uv hides a just-uploaded version otherwise
+
 .PHONY: uninstall
 uninstall: ## Uninstall photosheet and remove its desktop file
 	@echo "Uninstalling photosheet ..."
