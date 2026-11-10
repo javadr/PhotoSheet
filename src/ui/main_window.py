@@ -4,11 +4,13 @@ from __future__ import annotations
 import copy
 import datetime
 import os
+import sys
 import threading
 import random
 
 from PIL import Image
-from PySide6.QtCore import QSize, QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
+from PySide6 import __version__ as PYSIDE_VERSION
+from PySide6.QtCore import QSize, qVersion, QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
     QFrame, QGraphicsDropShadowEffect, QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
+from .. import __version__
 from ..core import preset
 from ..core.geometry import PageExtent, Rect, crop_overflow
 from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Brick, Calendar, Carousel, Collage,
@@ -567,8 +570,27 @@ class MainWindow(QMainWindow):
         act(v, "Larger Text", lambda: change_text_size(+1))
         act(v, "Smaller Text", lambda: change_text_size(-1))
         h = self.menuBar().addMenu("&Help")
-        act(h, "About PhotoSheet", lambda: QMessageBox.about(
-            self, "About PhotoSheet", "PhotoSheet\nPrint many photos per sheet, with ICC colour management."))
+        act(h, "About PhotoSheet", self._about)
+        act(h, "About Qt", lambda: QMessageBox.aboutQt(self, "About Qt"))
+
+    def _about(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("About PhotoSheet")
+        box.setIconPixmap(QPixmap(os.path.join(os.path.dirname(os.path.dirname(__file__)), "icons", "photosheet.png"))
+                          .scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(
+            f"<h3>PhotoSheet {__version__}</h3>"
+            "<p>Print many photos per sheet, with ICC colour management.</p>"
+            "<p>Written by Javad Razavian<br>"
+            '<a href="https://github.com/javadr/PhotoSheet">github.com/javadr/PhotoSheet</a></p>'
+            f'<p>Built with Python {sys.version.split()[0]} and <a href="https://www.qt.io">Qt</a> {qVersion()} '
+            f"(PySide6 {PYSIDE_VERSION}).</p>")
+        qt = box.addButton("About Qt", QMessageBox.ButtonRole.HelpRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        qt.clicked.disconnect()   # a HelpRole button would otherwise close the box before the Qt dialog shows
+        qt.clicked.connect(lambda: QMessageBox.aboutQt(box, "About Qt"))
+        box.exec()
 
     def _build_layout_dock(self):
         self.kind = QComboBox()
