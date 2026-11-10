@@ -1,5 +1,6 @@
 PhotoSheet
 ==============
+
 [![PyPI](https://img.shields.io/pypi/v/photosheet?style=social)](https://pypi.org/project/photosheet/)
 [![code size](https://img.shields.io/github/languages/code-size/javadr/PhotoSheet?style=social)](https://github.com/javadr/PhotoSheet/archive/master.zip)
 ![GitHub language count](https://img.shields.io/github/languages/count/javadr/PhotoSheet?style=social)
@@ -17,52 +18,60 @@ Put many photos on one printed sheet: passport photos, contact sheets, wallet pr
 posters and more. PhotoSheet previews the page, lets you arrange the photos with the mouse, and then
 prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 
-## Screenshots
+## Screenshot
 
-| N-up with captions | Polaroid |
-|---|---|
-| ![N-up contact sheet](https://raw.githubusercontent.com/javadr/PhotoSheet/master/docs/screenshots/nup.png) | ![Polaroid prints](https://raw.githubusercontent.com/javadr/PhotoSheet/master/docs/screenshots/polaroid.png) |
-| **Mosaic** | **Carousel** |
-| ![Mosaic rows](https://raw.githubusercontent.com/javadr/PhotoSheet/master/docs/screenshots/mosaic.png) | ![Carousel montage](https://raw.githubusercontent.com/javadr/PhotoSheet/master/docs/screenshots/carousel.png) |
+PhotoSheet window
+
+## Sample output
+
+Made entirely with `photosheet-cli` from Bing wallpapers, for example:
+
+```sh
+photosheet-cli photos/*.jpg -o nup.png --layout nup --rows 3 --cols 3 --caption number --crop
+photosheet-cli photos/*.jpg -o shapes.png --layout shapes --shape heart --rows 3 --cols 2 --crop
+photosheet-cli photos/*.jpg -o calendar.png --layout calendar --year 2027 --crop
+```
+
+![Sample layouts](https://raw.githubusercontent.com/javadr/PhotoSheet/master/docs/screenshots/poster.png)
 
 ## Features
 
 **Layouts**
 
-| Layout | What it is for |
-|---|---|
-| **N-up** | A grid of rows × columns, 3 × 3 to start with (change it in the Layout panel). Optional contact-sheet captions (filename and/or number) and cut marks. |
-| **Single** | One photo per page. |
-| **Poster** | One photo tiled across several pages, with overlap. |
-| **Carousel** | A circular montage with one wedge per photo. |
-| **Fixed size** | Prints of one size (passport, wallet, 4 × 6, 5 × 7 …) packed to fill the page. |
-| **Passport** | Copies of each photo filling a small sheet, like a photo shop: 8 passport photos in a 4 × 2 grid on a landscape 4 × 6 in. |
-| **Mosaic** | Rows of mixed-shape photos, each shown whole and not cropped. |
-| **Photo strip** | Booth-style strips with several frames each, outlined for cutting. Strips run sideways on a landscape page; the Direction setting can force either way. |
-| **Polaroid** | Instant-photo prints: white cards with a thin border and a thick bottom edge, with optional captions. |
-| **Triptych** | One photo split into 2 to 12 panels with a gap between them, side by side or stacked, on one page. |
-| **Package** | Studio sheets that mix print sizes, such as one 5 × 7 plus four wallets on an 8 × 10. Prints are packed to use the sheet well. |
-| **Collage** | Free-form: move and resize each photo with the mouse, with snapping guides, handles and bring-to-front. |
-| **Framed print** | One photo per page on a wide white, black or cream mat, with a thin line around the picture and an optional caption. |
-| **Badges** | Round photos for button badges, stickers or coasters (25 to 75 mm), staggered to fit more, with optional cut circles. |
-| **Feature** | One large hero photo with a row or column of smaller photos, repeated page after page. |
-| **Film strip** | 35 mm negative-style strips: black film with sprocket holes and 2:3 frames, several strips per page, vertical or horizontal (Direction setting). |
-| **Bento** | Asymmetric tile grids that fill the page (hero-left, hero-top, wide, pinwheel, magazine, six tiles). |
-| **Golden spiral** | Photos in a spiral, each taking about 62% of the space that is left. |
-| **Honeycomb** | Hexagon-shaped photos nested like a honeycomb, with optional cut lines. |
-| **Calendar** | A wall calendar: a photo above a month grid, one page per month, weekends in red. |
-| **Masonry** | Pinterest-style columns: photos keep their shape and each goes into the shortest column. |
-| **Shapes** | A grid of photos cropped to a heart, star, diamond, triangle, rounded square or circle. |
-| **Ring** | A wreath of round photos around a circle, with a bigger photo in the middle (6 or more around the ring). |
-| **Scatter** | A casual pile of tilted prints on white cards with soft shadows; the seed makes the same pile every time. |
-| **Slant** | Diagonal parallelogram panels side by side, each photo cut to its slanted shape; lean left or right. |
-| **Fan** | Cards fanned out like a hand of playing cards, the last on top. Suits landscape paper best. |
-| **Brick** | Brickwork that fills the page edge to edge: every other row is shifted half a tile and starts and ends with a half-width photo. Starts at 5 × 5 on landscape paper (change the Orientation, or use `--portrait`). |
-| **Timeline** | Photos alternate either side of a line, each with its date from the photo's own data. Use Edit ▸ Sort Photos by Date to put them in order. |
-| **Checker** | A chessboard: photos on every other square, the rest filled with a pale tint. Rows, columns and gutter are set in the Layout panel; tick *First cell empty* to start the pattern on the second square. |
-| **Pyramid** | Rows of 1, 2, 3 ... photos, each row centred, forming a triangle. Set the row count in the Layout panel. |
-| **Diamond** | Rows widen to the middle, then narrow again (1, 2, 3, 2, 1 for 5 rows). |
-| **Stairs** | Photos step down the page from top left to bottom right, each overlapping the one before. Set the photos per page in the Layout panel; tick *Climb to the top right* to start at the bottom left and step up. |
+| Layout            | What it is for                                                                                                                                                                                                    |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **N-up**          | A grid of rows × columns, 3 × 3 to start with (change it in the Layout panel). Optional contact-sheet captions (filename and/or number) and cut marks.                                                            |
+| **Single**        | One photo per page.                                                                                                                                                                                               |
+| **Poster**        | One photo tiled across several pages, with overlap.                                                                                                                                                               |
+| **Carousel**      | A circular montage with one wedge per photo.                                                                                                                                                                      |
+| **Fixed size**    | Prints of one size (passport, wallet, 4 × 6, 5 × 7 …) packed to fill the page.                                                                                                                                    |
+| **Passport**      | Copies of each photo filling a small sheet, like a photo shop: 8 passport photos in a 4 × 2 grid on a landscape 4 × 6 in.                                                                                         |
+| **Mosaic**        | Rows of mixed-shape photos, each shown whole and not cropped.                                                                                                                                                     |
+| **Photo strip**   | Booth-style strips with several frames each, outlined for cutting. Strips run sideways on a landscape page; the Direction setting can force either way.                                                           |
+| **Polaroid**      | Instant-photo prints: white cards with a thin border and a thick bottom edge, with optional captions.                                                                                                             |
+| **Triptych**      | One photo split into 2 to 12 panels with a gap between them, side by side or stacked, on one page.                                                                                                                |
+| **Package**       | Studio sheets that mix print sizes, such as one 5 × 7 plus four wallets on an 8 × 10. Prints are packed to use the sheet well.                                                                                    |
+| **Collage**       | Free-form: move and resize each photo with the mouse, with snapping guides, handles and bring-to-front.                                                                                                           |
+| **Framed print**  | One photo per page on a wide white, black or cream mat, with a thin line around the picture and an optional caption.                                                                                              |
+| **Badges**        | Round photos for button badges, stickers or coasters (25 to 75 mm), staggered to fit more, with optional cut circles.                                                                                             |
+| **Feature**       | One large hero photo with a row or column of smaller photos, repeated page after page.                                                                                                                            |
+| **Film strip**    | 35 mm negative-style strips: black film with sprocket holes and 2:3 frames, several strips per page, vertical or horizontal (Direction setting).                                                                  |
+| **Bento**         | Asymmetric tile grids that fill the page (hero-left, hero-top, wide, pinwheel, magazine, six tiles).                                                                                                              |
+| **Golden spiral** | Photos in a spiral, each taking about 62% of the space that is left.                                                                                                                                              |
+| **Honeycomb**     | Hexagon-shaped photos nested like a honeycomb, with optional cut lines.                                                                                                                                           |
+| **Calendar**      | A wall calendar: a photo above a month grid, one page per month, weekends in red.                                                                                                                                 |
+| **Masonry**       | Pinterest-style columns: photos keep their shape and each goes into the shortest column.                                                                                                                          |
+| **Shapes**        | A grid of photos cropped to a heart, star, diamond, triangle, rounded square or circle.                                                                                                                           |
+| **Ring**          | A wreath of round photos around a circle, with a bigger photo in the middle (6 or more around the ring).                                                                                                          |
+| **Scatter**       | A casual pile of tilted prints on white cards with soft shadows; the seed makes the same pile every time.                                                                                                         |
+| **Slant**         | Diagonal parallelogram panels side by side, each photo cut to its slanted shape; lean left or right.                                                                                                              |
+| **Fan**           | Cards fanned out like a hand of playing cards, the last on top. Suits landscape paper best.                                                                                                                       |
+| **Brick**         | Brickwork that fills the page edge to edge: every other row is shifted half a tile and starts and ends with a half-width photo. Starts at 5 × 5 on landscape paper (change the Orientation, or use `--portrait`). |
+| **Timeline**      | Photos alternate either side of a line, each with its date from the photo's own data. Use Edit ▸ Sort Photos by Date to put them in order.                                                                        |
+| **Checker**       | A chessboard: photos on every other square, the rest filled with a pale tint. Rows, columns and gutter are set in the Layout panel; tick *First cell empty* to start the pattern on the second square.            |
+| **Pyramid**       | Rows of 1, 2, 3 ... photos, each row centred, forming a triangle. Set the row count in the Layout panel.                                                                                                          |
+| **Diamond**       | Rows widen to the middle, then narrow again (1, 2, 3, 2, 1 for 5 rows).                                                                                                                                           |
+| **Stairs**        | Photos step down the page from top left to bottom right, each overlapping the one before. Set the photos per page in the Layout panel; tick *Climb to the top right* to start at the bottom left and step up.     |
 
 **Working with the page**
 
@@ -104,11 +113,11 @@ Without installing, run it straight from the source tree: `make run`.
 
 **Standalone downloads** (no Python needed) are attached to each [release](../../releases) when a `v*` tag is pushed:
 
-| Platform | File |
-|---|---|
-| Windows | `photosheet-vX.Y.Z.exe` |
-| Linux | `photosheet-vX.Y.Z` (built on a recent Ubuntu, so it needs a similarly recent distribution) |
-| macOS | `photosheet-vX.Y.Z-macos.zip`, an Apple-silicon app that is not code-signed: right-click it and choose Open the first time |
+| Platform | File                                                                                                                       |
+| -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Windows  | `photosheet-vX.Y.Z.exe`                                                                                                    |
+| Linux    | `photosheet-vX.Y.Z` (built on a recent Ubuntu, so it needs a similarly recent distribution)                                |
+| macOS    | `photosheet-vX.Y.Z-macos.zip`, an Apple-silicon app that is not code-signed: right-click it and choose Open the first time |
 
 ## Command line
 
