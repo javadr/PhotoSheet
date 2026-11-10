@@ -1,13 +1,16 @@
 import sys
 from pathlib import Path
 
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication
-
-from .ui.main_window import MainWindow, restore_text_size
-
 
 def main() -> int:
+    if any(a in ("-V", "--version") for a in sys.argv[1:]):   # answer without loading Qt or needing a display
+        from .banner import print_banner
+        print_banner()
+        return 0
+    from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QApplication
+
+    from .ui.main_window import MainWindow, restore_text_size
     app = QApplication(sys.argv)
     app.setApplicationName("PhotoSheet")
     app.setApplicationDisplayName("PhotoSheet")

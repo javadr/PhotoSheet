@@ -3,7 +3,7 @@ name = "photosheet"
 dynamic = ["version"]
 description = "Print many photos per sheet: passport photos, contact sheets, strips and more. Python + Qt."
 requires-python = ">=3.10"
-dependencies = ["PySide6", "Pillow", "numpy"]
+dependencies = ["PySide6", "Pillow", "numpy", "rich"]
 
 [project.scripts]
 photosheet = "photosheet.__main__:main"

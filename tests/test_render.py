@@ -146,3 +146,34 @@ def test_pan_picks_which_part_of_a_cropped_photo_is_printed(tmp_path):
     assert render_page(n, 0, dpi=72).getpixel((50, 50)) == (255, 0, 0)       # pan left: the red side
     n.images[0].hpan = 1.0
     assert render_page(n, 0, dpi=72).getpixel((50, 50)) == (0, 0, 255)       # pan right: the blue side
+
+
+def test_version_flag_prints_banner_and_exits_without_other_arguments(capsys):
+    import pytest as _pytest
+    from photosheet import __version__
+    for flag in ("--version", "-V"):
+        with _pytest.raises(SystemExit) as e:
+            cli.main([flag])                       # no images, no -o: must still work
+        assert e.value.code == 0
+        out = capsys.readouterr().out
+        assert f"v{__version__}" in out and "Print many photos per sheet" in out
+        assert "\x1b[" not in out                  # captured output is not a terminal: no colour codes
+
+
+def test_banner_is_coloured_on_a_terminal_and_plain_otherwise():
+    import io
+
+    from rich.console import Console
+
+    from photosheet import __version__
+    from photosheet.banner import ART, print_banner
+    tty = io.StringIO()
+    print_banner(Console(file=tty, force_terminal=True, color_system="truecolor", width=120))
+    out = tty.getvalue()
+    assert "\x1b[1;38;2;0;200;255m" in out and "\x1b[1;38;2;255;90;200m" in out   # gradient: cyan start, magenta end
+    plain = io.StringIO()
+    print_banner(Console(file=plain, force_terminal=False, width=120))
+    text = plain.getvalue()
+    assert "\x1b[" not in text and f"v{__version__}" in text
+    assert all(line.rstrip() in text for line in ART.strip("\n").splitlines())     # the whole art is there
+    assert max(len(line) for line in ART.strip("\n").splitlines()) < 80            # fits a normal terminal

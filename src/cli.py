@@ -40,8 +40,21 @@ def build(args) -> NUp | Single | Poster:
     return lay
 
 
+class _ShowVersion(argparse.Action):
+    """--version: print the banner and exit. Runs before argparse checks the required arguments."""
+
+    def __init__(self, option_strings, dest, **kw):
+        super().__init__(option_strings, dest, nargs=0, default=argparse.SUPPRESS, help="show the version and exit")
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        from .banner import print_banner
+        print_banner()
+        parser.exit()
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="photosheet-cli")
+    ap.add_argument("-V", "--version", action=_ShowVersion)
     ap.add_argument("images", nargs="+")
     ap.add_argument("-o", "--out", required=True, help=".pdf (multipage) or .png (page number appended)")
     ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic", "strip", "passport"], default="nup")
