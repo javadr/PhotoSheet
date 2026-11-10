@@ -25,7 +25,7 @@ from ..core import preset
 from ..core.geometry import PageExtent, Rect, crop_overflow
 from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Brick, Calendar, Carousel, Checker, Collage,
                             Fan, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic,
-                            NUp, Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral,
+                            NUp, Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs,
                             Strip, Timeline, Triptych, aspect, date_sort_key, snap_delta)
 from ..core.render import Cancelled, render_page, uncached
 
@@ -37,21 +37,21 @@ KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
          "Badges": Badges, "Feature": Feature, "Film strip": Filmstrip, "Bento": Bento,
          "Golden spiral": Spiral, "Honeycomb": Honeycomb, "Calendar": Calendar, "Masonry": Masonry,
          "Shapes": Shapes, "Ring": Ring, "Scatter": Scatter, "Slant": Slant, "Fan": Fan, "Brick": Brick,
-         "Timeline": Timeline, "Checker": Checker}
+         "Timeline": Timeline, "Checker": Checker, "Stairs": Stairs}
 KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "carousel",
         "Fixed size": "fixed", "Passport": "passport", "Mosaic": "mosaic", "Photo strip": "strip", "Polaroid": "polaroid",
         "Triptych": "triptych", "Package": "package", "Collage": "collage", "Framed print": "framed",
         "Badges": "badges", "Feature": "feature", "Film strip": "filmstrip", "Bento": "bento",
         "Golden spiral": "spiral", "Honeycomb": "honeycomb", "Calendar": "calendar", "Masonry": "masonry",
         "Shapes": "shapes", "Ring": "ring", "Scatter": "scatter", "Slant": "slant", "Fan": "fan", "Brick": "brick",
-        "Timeline": "timeline", "Checker": "checker"}
+        "Timeline": "timeline", "Checker": "checker", "Stairs": "stairs"}
 # The layout menu is long, so it is grouped (HIG: group related items, use progressive disclosure).
 KIND_GROUPS = (
     ("Grids", ("N-up", "Single", "Mosaic", "Masonry", "Brick", "Checker", "Bento", "Feature")),
     ("Print sizes", ("Fixed size", "Passport", "Package", "Badges", "Photo strip", "Film strip")),
     ("Frames", ("Polaroid", "Framed print", "Triptych", "Poster")),
     ("Shapes", ("Shapes", "Honeycomb", "Ring", "Carousel", "Golden spiral")),
-    ("Creative", ("Collage", "Scatter", "Fan", "Slant", "Timeline", "Calendar")),
+    ("Creative", ("Collage", "Scatter", "Fan", "Slant", "Stairs", "Timeline", "Calendar")),
 )
 assert sorted(k for _, ks in KIND_GROUPS for k in ks) == sorted(KINDS)
 SHAPE_LABELS = {"Heart": "heart", "Star": "star", "Diamond": "diamond", "Triangle": "triangle",
@@ -699,6 +699,9 @@ class MainWindow(QMainWindow):
         self.fan_spread = SliderSpin(10, 120, 60, "°")
         self.fan_border = SliderSpin(2, 15, 6, " %")
         self.tl_n = self._spin(1, 12, 6)
+        self.st_n = self._spin(1, 12, 5)
+        self.st_rise = QCheckBox("Climb to the top right")
+        self.st_rise.setToolTip("Start at the bottom left and step up, instead of starting at the top left and stepping down.")
         self.ck_empty = QCheckBox("First cell empty")
         self.ck_empty.setToolTip("Start the pattern on the second square instead of the first.")
         self.tl_dates = QCheckBox("Show dates")
@@ -748,7 +751,7 @@ class MainWindow(QMainWindow):
             ("scatter", "Random seed", self.sc_seed), ("scatter", "", self.shuffle_btn),
             ("slant", "Panels", self.slant_panels), ("slant", "Lean", self.slant),
             ("fan", "Cards per page", self.fan_n), ("fan", "Spread", self.fan_spread), ("fan", "Border", self.fan_border),
-            ("timeline", "Photos per page", self.tl_n), ("timeline", "", self.tl_dates), ("checker", "", self.ck_empty),
+            ("timeline", "Photos per page", self.tl_n), ("timeline", "", self.tl_dates), ("checker", "", self.ck_empty), ("stairs", "Photos per page", self.st_n), ("stairs", "", self.st_rise),
             ("all", "", self.crop),
         ]:
             (pinned if any(w is x for x in pinned_widgets) else form).addRow(labels.label(label), w)
@@ -1035,6 +1038,8 @@ class MainWindow(QMainWindow):
         elif cls is Checker:
             kw = dict(columns=self.cols.value(), rows=self.rows.value(), gutter=self.gutter.value(),
                       first_empty=self.ck_empty.isChecked())
+        elif cls is Stairs:
+            kw = dict(photos=self.st_n.value(), rising=self.st_rise.isChecked())
         elif cls is Timeline:
             kw = dict(photos=self.tl_n.value(), dates=self.tl_dates.isChecked(), gutter=self.gutter.value())
         elif cls is Calendar:
@@ -1149,6 +1154,9 @@ class MainWindow(QMainWindow):
             self.fan_border.setValue(round(lay.border * 100))
         if isinstance(lay, Checker):
             self.ck_empty.setChecked(lay.first_empty)
+        if isinstance(lay, Stairs):
+            self.st_n.setValue(lay.photos)
+            self.st_rise.setChecked(lay.rising)
         if isinstance(lay, Timeline):
             self.tl_n.setValue(lay.photos)
             self.tl_dates.setChecked(lay.dates)

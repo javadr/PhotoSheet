@@ -8,7 +8,7 @@ import sys
 from .core.geometry import PageExtent
 from .core.layouts import (BENTO, MM, RECIPES, SHAPE_NAMES, Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip,
                            FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic, NUp, Package, Passport,
-                           Brick, Checker, Fan, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Strip,
+                           Brick, Checker, Fan, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs, Strip,
                            Timeline, Triptych)
 from .core.render import render_all
 
@@ -73,6 +73,8 @@ def build(args) -> NUp | Single | Poster:
         lay = Slant(page=page, panels=max(2, args.panels), slant=args.slant, gutter=args.gutter)
     elif args.layout == "fan":
         lay = Fan(page=page, photos=args.fan_photos, spread=args.spread, border=args.fan_border / 100)
+    elif args.layout == "stairs":
+        lay = Stairs(page=page, photos=args.stairs_photos, rising=args.rising)
     elif args.layout == "timeline":
         lay = Timeline(page=page, photos=args.timeline_photos, dates=not args.no_dates, gutter=args.gutter)
     elif args.layout == "checker":
@@ -116,7 +118,7 @@ def main(argv=None) -> int:
     ap.add_argument("--layout", choices=["nup", "single", "poster", "carousel", "fixed", "mosaic", "strip", "passport", "polaroid", "triptych", "package",
                                                        "collage", "framed", "badges", "feature", "filmstrip", "bento", "spiral",
                                                        "honeycomb", "calendar", "masonry", "shapes", "ring", "scatter", "slant", "fan", "timeline",
-                                                       "brick", "checker"], default="nup")
+                                                       "brick", "checker", "stairs"], default="nup")
     ap.add_argument("--rows", type=int, help="grid rows (default: 3, Shapes 3, Brick 6)")
     ap.add_argument("--cols", type=int, help="grid columns (default: 3, Shapes 2, Masonry 3, Brick 6)")
     ap.add_argument("--segments", type=int, default=4)
@@ -163,6 +165,8 @@ def main(argv=None) -> int:
     ap.add_argument("--fan-photos", type=int, default=5, help="fan: cards per page")
     ap.add_argument("--spread", type=float, default=60, help="fan: angle from the first card to the last, degrees")
     ap.add_argument("--fan-border", type=float, default=6, help="fan: card border, percent of the card width")
+    ap.add_argument("--stairs-photos", type=int, default=5, help="stairs: photos per page")
+    ap.add_argument("--rising", action="store_true", help="stairs: climb from bottom left to top right")
     ap.add_argument("--timeline-photos", type=int, default=6, help="timeline: photos per page")
     ap.add_argument("--first-empty", action="store_true", help="checker: leave the first cell empty and start on the second")
     ap.add_argument("--no-dates", action="store_true", help="timeline: leave the date captions out")

@@ -907,3 +907,20 @@ def test_checker():
         raise AssertionError
     except ValueError:
         pass
+
+
+def test_stairs_steps_diagonally_inside_the_page():
+    from photosheet.core.layouts import ImageItem, Stairs
+    s = Stairs(page=PageExtent(400, 400), photos=3)
+    for i in range(7):
+        s.add(ImageItem(f"{i}.jpg"))
+    r = [x[1] for x in s.slots(0)]
+    assert s.pages == 3 and len(s.slots(2)) == 1
+    assert r[0].x < r[1].x < r[2].x and r[0].y < r[1].y < r[2].y and r[1].x < r[0].x + r[0].w   # overlap
+    assert max(q.x + q.w for q in r) <= 400 + 1e-6 and max(q.y + q.h for q in r) <= 400 + 1e-6
+    u = Stairs(page=PageExtent(400, 400), photos=3, rising=True)
+    u.images = s.images[:3]
+    q = [x[1] for x in u.slots(0)]
+    assert q[0].x < q[2].x and q[0].y > q[2].y and q[0].y == r[2].y and q[2].y == r[0].y   # mirrored top to bottom
+    with pytest.raises(ValueError):
+        Stairs(photos=0)

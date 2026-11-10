@@ -1699,3 +1699,29 @@ class Checker(Layout):
 
     def shapes(self, page: int):
         return [("rect", r, (232, 232, 236)) for r in self._cells(1)]
+
+
+@dataclass
+class Stairs(Layout):
+    """Photos stepping down the page from top left to bottom right (or bottom left to top right if `rising`), each overlapping the one before it by 35%."""
+    photos: int = 5
+    rising: bool = False   # climb from bottom left to top right instead
+
+    def __post_init__(self):
+        if not 1 <= self.photos <= 12:
+            raise ValueError("photos must be 1-12")
+
+    @property
+    def per_page(self) -> int:
+        return self.photos
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(len(self.images), self.photos))
+
+    def slots(self, page: int):
+        p, n = self.page, self.photos
+        k = 1 + 0.65 * (n - 1)
+        w, h = p.imageable_w / k, p.imageable_h / k
+        return [(item, Rect(p.left + i * 0.65 * w, p.top + ((n - 1 - i) if self.rising else i) * 0.65 * h, w, h))
+                for i, item in enumerate(self.images[page * n:(page + 1) * n])]

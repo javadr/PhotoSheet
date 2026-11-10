@@ -60,6 +60,7 @@ prints it or saves it as a PDF or PNG. Built with Python and Qt (PySide6).
 | **Brick** | Brickwork that fills the page edge to edge: every other row is shifted half a tile and starts and ends with a half-width photo. Starts at 5 × 5 on landscape paper (change the Orientation, or use `--portrait`). |
 | **Timeline** | Photos alternate either side of a line, each with its date from the photo's own data. Use Edit ▸ Sort Photos by Date to put them in order. |
 | **Checker** | A chessboard: photos on every other square, the rest filled with a pale tint. Rows, columns and gutter are set in the Layout panel; tick *First cell empty* to start the pattern on the second square. |
+| **Stairs** | Photos step down the page from top left to bottom right, each overlapping the one before. Set the photos per page in the Layout panel; tick *Climb to the top right* to start at the bottom left and step up. |
 
 **Working with the page**
 
@@ -131,6 +132,7 @@ photosheet-cli photos/*.jpg -o timeline.pdf --layout timeline --timeline-photos 
 # Brickwork that fills the page, 5 rows by 5 columns
 photosheet-cli photos/*.jpg -o brick.pdf --layout brick --rows 5 --cols 5   # landscape by default; --portrait for upright paper
 photosheet-cli photos/*.jpg -o checker.pdf --layout checker --rows 4 --cols 4 --first-empty   # photos start on the second square
+photosheet-cli photos/*.jpg -o stairs.pdf --layout stairs --stairs-photos 5 --rising   # bottom left to top right
 
 # Slanted panels, a fan of cards on landscape paper
 photosheet-cli photos/*.jpg -o slant.pdf --layout slant --panels 5 --slant 14
