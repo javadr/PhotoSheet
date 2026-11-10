@@ -92,7 +92,7 @@ def _prefetch(items, printer_profile, fast, progress=None) -> None:
     if progress:
         progress(0, len(todo))
     if len(todo) > 1:
-        with ThreadPoolExecutor(min(len(todo), os.cpu_count() or 2)) as ex:
+        with ThreadPoolExecutor(min(len(todo), os.cpu_count() or 2, 16 if fast else 4)) as ex:   # full-size photos are big: fewer at once
             list(ex.map(one, todo))
     elif todo:
         one(todo[0])

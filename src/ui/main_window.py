@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 import datetime
+import os
+import threading
 import random
 
 from PIL import Image
@@ -154,6 +156,8 @@ class _Edit(QUndoCommand):
 class _Signals(QObject):
     done = Signal(int, object)   # generation, QImage or Exception
     progress = Signal(int, int, int)   # generation, photos finished, photos on the page
+    export_progress = Signal(int, int)   # pages rendered, pages in total
+    export_done = Signal(object)   # None, or the Exception
 
 
 class _Job(QRunnable):
@@ -174,6 +178,53 @@ class _Job(QRunnable):
             self.sig.done.emit(self.gen, res)
         except RuntimeError:
             pass  # window closed while rendering
+
+
+class _ExportJob(QRunnable):
+    """Renders every page at 300 dpi while the user picks a file name, then saves once the path is known.
+    shortcut: all pages are held in memory until saved (~26 MB per A4 page); stream to disk for very long documents."""
+
+    def __init__(self, layout, sig):
+        super().__init__()
+        self.layout, self.sig = layout, sig
+        self.path = None
+        self.cancelled = False
+        self.ready = threading.Event()   # set once the user has chosen a path, or cancelled
+
+    def choose(self, path):
+        self.path = path
+        self.ready.set()
+
+    def cancel(self):
+        self.cancelled = True
+        self.ready.set()
+
+    def run(self):
+        try:
+            n = self.layout.pages
+            pages = []
+            for i in range(n):
+                if self.cancelled:
+                    return
+                pages.append(render_page(self.layout, i, 300))
+                self.sig.export_progress.emit(i + 1, n)
+            self.ready.wait()
+            if self.cancelled:
+                return
+            f = self.path
+            if f.lower().endswith(".pdf"):
+                pages[0].save(f, save_all=True, append_images=pages[1:], resolution=300)
+            else:
+                stem, _, ext = f.rpartition(".")
+                for i, im in enumerate(pages):
+                    im.save(f"{stem}-{i + 1}.{ext}" if n > 1 else f, dpi=(300, 300))
+            res = None
+        except Exception as e:
+            res = e
+        try:
+            self.sig.export_done.emit(res)
+        except RuntimeError:
+            pass  # window closed meanwhile
 
 
 class SliderSpin(QWidget):
@@ -424,6 +475,10 @@ class MainWindow(QMainWindow):
         bl.addWidget(self.busy_bar)
         self.busy.hide()
         self._cold = 0
+        self._export = None   # the running _ExportJob
+        self._export_name, self._export_pages = "", (0, 0)
+        self.sig.export_progress.connect(self._on_export_progress)
+        self.sig.export_done.connect(self._on_export_done)
         self.busy_timer = QTimer(self, singleShot=True, interval=250)   # quick renders never flash a notice
         self.busy_timer.timeout.connect(self._show_busy)
         self.statusBar().hide()   # only shown while there is an error to report, so it leaves no blank strip
@@ -1617,7 +1672,7 @@ class MainWindow(QMainWindow):
         return pm
 
     def _show_busy(self):
-        if not self._cold:   # photos already loaded: just drawing, which is quick
+        if not self._cold or self._export:   # photos already loaded: just drawing, which is quick
             return
         self.busy.adjustSize()
         self._place_busy()
@@ -1625,7 +1680,7 @@ class MainWindow(QMainWindow):
         self.busy.raise_()
 
     def _on_progress(self, gen, done, total):
-        if gen != self._gen:
+        if gen != self._gen or self._export:
             return
         self.busy_bar.setRange(0, total)
         self.busy_bar.setValue(done)
@@ -1656,7 +1711,8 @@ class MainWindow(QMainWindow):
         if gen != self._gen:
             return  # a newer render is on its way
         self.busy_timer.stop()
-        self.busy.hide()
+        if not self._export:
+            self.busy.hide()
         if isinstance(res, Exception):
             self.statusBar().show()
             self.statusBar().showMessage(f"Render failed: {res}")
@@ -1685,16 +1741,50 @@ class MainWindow(QMainWindow):
             preset.save(self.layout_, f)
 
     def export(self):
+        if self._export:
+            return   # one at a time; the popup shows the running one
+        if isinstance(self.layout_, Collage):
+            self.layout_.slots(0)   # place new photos on the UI thread first, as refresh() does
+        job = self._export = _ExportJob(copy.deepcopy(self.layout_), self.sig)   # snapshot: later edits don't leak in
+        self._export_pages = (0, job.layout.pages)
+        self.pool.start(job)   # rendering runs while the file dialog is open
         f, _ = QFileDialog.getSaveFileName(self, "Export", "sheet.pdf", "PDF (*.pdf);;PNG (*.png)")
         if not f:
+            job.cancel()
+            self._export = None
             return
-        pages = [render_page(self.layout_, i, 300) for i in range(self.layout_.pages)]
-        if f.lower().endswith(".pdf"):
-            pages[0].save(f, save_all=True, append_images=pages[1:], resolution=300)
-        else:
-            stem, _, ext = f.rpartition(".")
-            for i, im in enumerate(pages):
-                im.save(f"{stem}-{i + 1}.{ext}" if len(pages) > 1 else f, dpi=(300, 300))
+        self._export_name = os.path.basename(f)
+        job.choose(f)
+        self._export_popup()
+
+    def _export_popup(self):
+        done, total = self._export_pages
+        saving = done >= total
+        self.busy_label.setText(f"Exporting {self._export_name}")
+        self.busy_bar.setRange(0, 0 if saving else total)   # saving has no known length: indeterminate
+        self.busy_bar.setValue(done)
+        self.busy_count.setText("Saving…" if saving else f"{done} of {total} pages")
+        self.busy.adjustSize()
+        self._place_busy()
+        self.busy.show()
+        self.busy.raise_()
+
+    def _on_export_progress(self, done, total):
+        self._export_pages = (done, total)
+        if self._export and self._export.path:   # the popup only exists once a path is chosen
+            self._export_popup()
+
+    def _on_export_done(self, err):
+        self._export = None
+        if err:
+            self.busy.hide()
+            QMessageBox.warning(self, "Export", f"Could not export {self._export_name}: {err}")
+            return
+        self.busy_label.setText(f"Exported {self._export_name}")
+        self.busy_bar.setRange(0, 1)
+        self.busy_bar.setValue(1)
+        self.busy_count.setText("Done")
+        QTimer.singleShot(2500, lambda: None if self._export else self.busy.hide())
 
     def print_(self):
         pr = QPrinter(QPrinter.PrinterMode.HighResolution)
