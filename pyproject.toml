@@ -18,13 +18,13 @@ version = {attr = "photosheet.__version__"}
 
 # The package folder is src/ itself; it is imported as "photosheet".
 [tool.setuptools]
-packages = ["photosheet", "photosheet.core", "photosheet.ui"]
+packages = ["photosheet", "photosheet.core", "photosheet.ui", "photosheet.icons"]
 
 [tool.setuptools.package-dir]
 photosheet = "src"
 
 [tool.setuptools.package-data]
-photosheet = ["icons/*"]
+"photosheet.icons" = ["*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

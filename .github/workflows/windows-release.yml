@@ -2,11 +2,11 @@ name: Build the Windows executable
 
 on:
   push:
+    branches: [master, main]
     tags:
       - 'v*'
+  pull_request:
   workflow_dispatch:
-  release:
-    types: [released]
 
 env:
   PYTHON_VERSION: '3.12'
@@ -36,6 +36,24 @@ jobs:
     - name: 'Use PyInstaller to build the executable'
       shell: pwsh
       run: ./.github/build.ps1
+
+    - name: 'Self-test the executable (every layout, colour management, PDF export, the window)'
+      shell: pwsh
+      run: |
+        # The app is windowed (no console), so run it to completion and read its report file.
+        $exe = (Get-ChildItem dist/photosheet-v*.exe).FullName
+        $env:QT_QPA_PLATFORM = "offscreen"
+        $p = Start-Process -FilePath $exe -ArgumentList "--self-test", "selftest.txt" -Wait -PassThru
+        if (Test-Path selftest.txt) { Get-Content selftest.txt } else { Write-Host "no report was written" }
+        if ($p.ExitCode -ne 0) { exit 1 }
+
+    - name: 'Upload the self-test report'
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: selftest-windows
+        path: selftest.txt
+        if-no-files-found: ignore
 
     - name: 'Upload artifacts'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

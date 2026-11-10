@@ -977,3 +977,18 @@ def test_page_drag_swaps_bento_and_spiral_photos_and_calendar_pages_navigate(app
     w.goto(5)
     assert w.page_no == 5 and w.page_label.text().strip() == "6 / 12"
     assert len(w.layout_.slots(5)) == 1 and w.layout_.slots(5)[0][0] is w.layout_.images[5 % 3]   # photos repeat across months
+
+
+def test_self_test_passes_in_the_source_tree_and_reports_failures(app, tmp_path, monkeypatch):
+    from photosheet import selftest
+    report = tmp_path / "report.txt"
+    code = selftest.run(str(report))
+    text = report.read_text(encoding="utf-8")
+    assert code == 0 and "SELF-TEST PASSED" in text and "FAIL" not in text, text
+    for step in ("data files", "colour management and effects", "every layout renders", "PDF export", "window and preview"):
+        assert any(line.startswith("ok") and step in line for line in text.splitlines()), step
+    # a broken bundle must fail loudly: pretend the icons were not packaged
+    import photosheet
+    monkeypatch.setattr(photosheet, "__file__", str(tmp_path / "__init__.py"))
+    assert selftest.run(str(report)) == 1
+    assert "FAIL  data files" in report.read_text(encoding="utf-8")

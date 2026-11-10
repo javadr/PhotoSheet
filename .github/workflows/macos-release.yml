@@ -2,11 +2,11 @@ name: Build the macOS app
 
 on:
   push:
+    branches: [master, main]
     tags:
       - 'v*'
+  pull_request:
   workflow_dispatch:
-  release:
-    types: [released]
 
 env:
   PYTHON_VERSION: '3.12'
@@ -40,6 +40,20 @@ jobs:
     - name: 'Smoke test the app'
       shell: bash
       run: ./dist/PhotoSheet.app/Contents/MacOS/PhotoSheet --version
+
+    - name: 'Self-test the app (every layout, colour management, PDF export, the window)'
+      shell: bash
+      run: |
+        QT_QPA_PLATFORM=offscreen ./dist/PhotoSheet.app/Contents/MacOS/PhotoSheet --self-test selftest.txt || { cat selftest.txt || true; exit 1; }
+        cat selftest.txt
+
+    - name: 'Upload the self-test report'
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: selftest-macos
+        path: selftest.txt
+        if-no-files-found: ignore
 
     - name: 'Upload artifacts'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
