@@ -12,12 +12,12 @@ import random
 from PIL import Image
 from PySide6 import __version__ as PYSIDE_VERSION
 from PySide6.QtCore import QSize, qVersion, QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
+from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QStyledItemDelegate, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
     QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
-    QFrame, QGraphicsDropShadowEffect, QSlider, QStyle, QToolButton, QVBoxLayout, QWidget,
+    QFrame, QGraphicsDropShadowEffect, QSlider, QStyle, QStyleOptionToolButton, QStylePainter, QToolButton, QVBoxLayout, QWidget,
 )
 
 from .. import __version__
@@ -101,6 +101,35 @@ def dropped_images(mime) -> list[str]:
         return []
     return [u.toLocalFile() for u in mime.urls()
             if u.isLocalFile() and u.toLocalFile().lower().endswith(tuple(IMG_SUFFIXES))]
+
+
+class _NavButton(QToolButton):
+    """Vector page-navigation glyph (like SF Symbols chevron.left / chevron.left.to.line), mirrored for next/last.
+    Drawn in the palette's text colour so it follows light/dark and dims when disabled."""
+
+    def __init__(self, to_end: bool, forward: bool):
+        super().__init__()
+        self.to_end, self.forward = to_end, forward
+
+    def paintEvent(self, ev):
+        p = QStylePainter(self)
+        opt = QStyleOptionToolButton()
+        self.initStyleOption(opt)
+        opt.text, opt.icon = "", QIcon()   # the style draws only the hover/pressed plate; the glyph is ours
+        p.drawComplexControl(QStyle.ComplexControl.CC_ToolButton, opt)
+        grp = QPalette.ColorGroup.Normal if self.isEnabled() else QPalette.ColorGroup.Disabled
+        pen = QPen(self.palette().color(grp, QPalette.ColorRole.ButtonText), 1.8)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(pen)
+        p.translate(self.width() / 2, self.height() / 2)
+        if self.forward:
+            p.scale(-1, 1)
+        x = 2.5 if self.to_end else 0   # shift the chevron right to leave room for the end bar
+        p.drawPolyline(QPolygonF([QPointF(x + 2.5, -5.5), QPointF(x - 2.5, 0), QPointF(x + 2.5, 5.5)]))
+        if self.to_end:
+            p.drawLine(QPointF(-5.5, -5.5), QPointF(-5.5, 5.5))
 
 
 class _NumberedDelegate(QStyledItemDelegate):
@@ -568,23 +597,28 @@ class MainWindow(QMainWindow):
         act(m, "Quit", self.close, "Ctrl+Q")
         # Page navigation: a row centred directly under the page preview.
         nav = QWidget()
+        self._nav_btns = []
         row = QHBoxLayout(nav)
         row.setContentsMargins(0, 4, 0, 4)
+        row.setSpacing(0)   # buttons carry their own 28 pt hit area
         row.addStretch()
         # Glyph-only buttons need a real name for screen readers and Voice Control.
-        for text, glyph, step, key in (("Previous Page", "◀", -1, "PgUp"), ("Next Page", "▶", 1, "PgDown")):
+        # goto() clamps, so first/last are just a far jump in either direction.
+        for text, to_end, step, key in (("First Page", True, -10**9, "Ctrl+Home"), ("Previous Page", False, -1, "PgUp"),
+                                        ("Next Page", False, 1, "PgDown"), ("Last Page", True, 10**9, "Ctrl+End")):
             a = QAction(text, self)
             a.triggered.connect(lambda _=False, d=step: self.goto(self.page_no + d))
             a.setShortcut(key)
-            a.setIconText(glyph)
             a.setToolTip(f"{text} ({key})")
             self.addAction(a)   # keeps the shortcut working anywhere in the window
-            btn = QToolButton()
+            btn = _NavButton(to_end, step > 0)
             btn.setDefaultAction(a)
             btn.setAccessibleName(text)
             btn.setAutoRaise(True)
+            btn.setFixedSize(22, 28)   # glyphs are ~11 px wide, so 22 keeps them close; above the 20 pt desktop minimum
+            self._nav_btns.append((btn, step))
             row.addWidget(btn)
-            if step < 0:
+            if step == -1:
                 self.page_label = QLabel(" 1 / 1 ")
                 self.page_label.setAccessibleName("Current page")
                 row.addWidget(self.page_label)
@@ -1889,6 +1923,8 @@ class MainWindow(QMainWindow):
     def refresh(self):
         self.page_no = max(0, min(self.page_no, self.layout_.pages - 1))
         self.page_label.setText(f" {self.page_no + 1} / {self.layout_.pages} ")
+        for btn, step in self._nav_btns:   # dim the controls that can't go further
+            btn.setEnabled(self.page_no > 0 if step < 0 else self.page_no < self.layout_.pages - 1)
         if isinstance(self.layout_, Collage):
             self.layout_.slots(0)   # place new photos here, on the UI thread, before the render thread reads them
         self._gen += 1
