@@ -7,7 +7,7 @@ from PIL import Image
 pytest.importorskip("PySide6")
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QStyleOptionViewItem
 
 from photosheet.core import preset
 from photosheet.core.layouts import Carousel, ImageItem
@@ -1522,3 +1522,19 @@ def test_badge_size_presets_set_diameter_and_fall_back_to_custom(app):
     assert w.diameter.value() == 32 and w.layout_.diameter == pytest.approx(32 * MM)
     w.diameter.setValue(40)
     assert w.badge_size.currentText() == "Custom"
+
+
+def test_image_list_is_numbered_and_the_dock_shows_the_total(app, tmp_path):
+    w = _ready_window(app, tmp_path, 3)
+    assert w.image_dock.windowTitle() == "Images (3)"
+    idx = w.list.model().index(1, 0)
+    opt = QStyleOptionViewItem()
+    w.list.itemDelegate().initStyleOption(opt, idx)
+    assert opt.text.startswith("2.") and w.list.item(1).text().endswith(".png") and not w.list.item(1).text().startswith("2")
+
+
+def test_a_single_image_gets_no_number_or_total(app, tmp_path):
+    w = _ready_window(app, tmp_path, 1)
+    opt = QStyleOptionViewItem()
+    w.list.itemDelegate().initStyleOption(opt, w.list.model().index(0, 0))
+    assert w.image_dock.windowTitle() == "Images" and not opt.text.startswith("1.")

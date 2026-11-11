@@ -48,7 +48,7 @@ def build(args) -> NUp | Single | Poster:
     elif args.layout == "framed":
         lay = FramedPrint(page=page, mat=args.mat, color=args.mat_color, caption=args.caption)
     elif args.layout == "badges":
-        lay = Badges(page=page, diameter=args.diameter * MM, gutter=args.gutter, staggered=not args.square, bleed=args.bleed * MM, fill_margin=not args.white_margin,
+        lay = Badges(page=page, diameter=args.diameter * MM, gutter=2 if args.gutter == 4 else args.gutter, staggered=not args.square, bleed=args.bleed * MM, fill_margin=not args.white_margin,
                      marks=args.marks)
     elif args.layout == "feature":
         lay = Feature(page=page, thumbs=args.thumbs, side=args.side, hero_share=args.hero_share, gutter=args.gutter)

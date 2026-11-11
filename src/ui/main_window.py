@@ -103,6 +103,14 @@ def dropped_images(mime) -> list[str]:
             if u.isLocalFile() and u.toLocalFile().lower().endswith(tuple(IMG_SUFFIXES))]
 
 
+class _NumberedDelegate(QStyledItemDelegate):
+    """Shows each row's position before its file name; the item text itself stays the bare file name."""
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        if index.model().rowCount() > 1:   # a lone photo needs no number
+            option.text = f"{index.row() + 1}.  {option.text}"
+
+
 class _ImageList(QListWidget):
     """List that reorders internally but also takes image files dragged in from a file manager."""
     files_dropped = Signal(list)
@@ -845,6 +853,7 @@ class MainWindow(QMainWindow):
 
     def _build_image_dock(self):
         self.list = _ImageList()
+        self.list.setItemDelegate(_NumberedDelegate(self.list))
         self.list.files_dropped.connect(self._add_files)
         self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.list.model().rowsMoved.connect(self._reordered)
@@ -976,7 +985,7 @@ class MainWindow(QMainWindow):
         k = KEYS[self.kind.currentText()]
         for key, widgets in self.rowsof.items():
             for w in widgets:
-                visible = (key == "all" or k in key.split(",")) and not (w is self.crop and k in ("badges", "slant"))   # these always fill their shape
+                visible = (key == "all" or k in key.split(",")) and not (w is self.crop and k in ("badges", "slant", "carousel"))   # these always fill their shape
                 if w is self.per_sheet:   # a readout with nothing to say takes no room (no label with a blank value)
                     visible = visible and bool(self.per_sheet.text())
                 w.parentWidget().layout().setRowVisible(w, visible)
@@ -1289,6 +1298,7 @@ class MainWindow(QMainWindow):
         self.list.clear()
         for it in self.layout_.images:
             self.list.addItem(it.path.rsplit("/", 1)[-1])
+        self.image_dock.setWindowTitle(f"Images ({self.list.count()})" if self.list.count() > 1 else "Images")
 
     def _edit(self, text, change, merge=False):
         """Run change() on the image list and record it for undo."""
