@@ -526,6 +526,17 @@ def test_carousel_drag_swaps_wedges_and_pans_the_photo(app, tmp_path):
     assert w.undo_act.text() == "Undo Reposition Photo"
 
 
+def test_remove_all_clears_the_list_and_undo_restores_it(app, tmp_path):
+    w = _win_with_images(tmp_path, 3)
+    w.remove_all()
+    assert w.layout_.images == [] and w.list.count() == 0
+    w.undo_stack.undo()
+    assert len(w.layout_.images) == 3 and w.list.count() == 3
+    w.undo_stack.redo()
+    w.remove_all()   # nothing left: no extra undo step
+    assert w.undo_act.text() == "Undo Remove All Images"
+
+
 def test_carousel_follows_the_number_of_photos_on_add_remove_and_undo(app, tmp_path):
     from photosheet.core.geometry import segment_angles
     w = _win_with_images(tmp_path, 4)

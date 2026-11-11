@@ -859,9 +859,11 @@ class MainWindow(QMainWindow):
         self.list.model().rowsMoved.connect(self._reordered)
         self.list.currentRowChanged.connect(self._load_effects)
         self.list.currentRowChanged.connect(lambda *_: self._refresh_overlay())
-        add, rem = QPushButton("Add…"), QPushButton("Remove")
+        add, rem, clear = QPushButton("Add…"), QPushButton("Remove"), QPushButton("Remove All")
         add.clicked.connect(self.add_images)
         rem.clicked.connect(self.remove_selected)
+        clear.clicked.connect(self.remove_all)
+        clear.setToolTip("Remove every image from the sheet (Undo brings them back).")
         self.gamma = QDoubleSpinBox(minimum=0.1, maximum=5, singleStep=0.1, value=1.0)
         self.temp = self._spin(-2000, 2000, 0)
         self.sharp = QDoubleSpinBox(minimum=0, maximum=5, singleStep=0.1, value=0)
@@ -892,6 +894,7 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.addWidget(add)
         row.addWidget(rem)
+        row.addWidget(clear)
         fx = QWidget()
         fxl = QVBoxLayout(fx)
         fxl.setContentsMargins(0, 0, 0, 0)
@@ -1336,6 +1339,13 @@ class MainWindow(QMainWindow):
             self._sync_segments()
             self._fill_list()
             self.list.setCurrentRow(min(r, self.list.count() - 1))
+            self.refresh()
+
+    def remove_all(self):
+        if self.layout_.images:
+            self._edit("Remove All Images", self.layout_.images.clear)
+            self._sync_segments()
+            self._fill_list()
             self.refresh()
 
     def _reordered(self, *_):
