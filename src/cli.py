@@ -7,7 +7,7 @@ import os
 import sys
 
 from .core.geometry import PageExtent
-from .core.layouts import (BENTO, MM, RECIPES, SHAPE_NAMES, Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip,
+from .core.layouts import (BADGE_SIZES, BENTO, MM, RECIPES, SHAPE_NAMES, Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip,
                            FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic, NUp, Package, Passport,
                            Brick, Checker, Diamond, Pyramid, Fan, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs, Strip,
                            Timeline, Triptych)
@@ -48,7 +48,7 @@ def build(args) -> NUp | Single | Poster:
     elif args.layout == "framed":
         lay = FramedPrint(page=page, mat=args.mat, color=args.mat_color, caption=args.caption)
     elif args.layout == "badges":
-        lay = Badges(page=page, diameter=args.diameter * MM, gutter=args.gutter, staggered=not args.square,
+        lay = Badges(page=page, diameter=args.diameter * MM, gutter=args.gutter, staggered=not args.square, bleed=args.bleed * MM, fill_margin=not args.white_margin,
                      marks=args.marks)
     elif args.layout == "feature":
         lay = Feature(page=page, thumbs=args.thumbs, side=args.side, hero_share=args.hero_share, gutter=args.gutter)
@@ -59,7 +59,7 @@ def build(args) -> NUp | Single | Poster:
     elif args.layout == "spiral":
         lay = Spiral(page=page, photos=args.spiral_photos, share=args.share, clockwise=not args.ccw, gutter=args.gutter)
     elif args.layout == "honeycomb":
-        lay = Honeycomb(page=page, size=args.hex_size * MM, gutter=args.gutter, marks=args.marks)
+        lay = Honeycomb(page=page, size=args.hex_size * MM, gutter=args.gutter, fill=args.fill, half_cells=args.half_cells, marks=args.marks)
     elif args.layout == "calendar":
         lay = Calendar(page=page, year=args.year, month=args.month, months=args.months, week_start=args.week_start,
                        photo_share=args.photo_share, gutter=args.gutter)
@@ -86,7 +86,7 @@ def build(args) -> NUp | Single | Poster:
     elif args.layout in ("pyramid", "diamond"):
         lay = {"pyramid": Pyramid, "diamond": Diamond}[args.layout](page=page, gutter=args.gutter, **({} if args.rows is None else {"rows": args.rows}))
     elif args.layout == "brick":
-        lay = Brick(page=page, gutter=args.gutter, **({} if args.rows is None else {"rows": args.rows}),
+        lay = Brick(page=page, gutter=args.gutter, half_cells=not args.no_half_tiles, **({} if args.rows is None else {"rows": args.rows}),
                     **({} if args.cols is None else {"columns": max(2, args.cols)}))
     elif args.layout == "strip":
         lay = Strip(page=page, frames=args.frames or 4, strip_w=(args.strip_w or 51) * MM, strip_h=args.strip_h * MM,
@@ -143,7 +143,12 @@ def main(argv=None) -> int:
     ap.add_argument("--recipe", choices=list(RECIPES), default="5x7-4wallets", help="package: which sheet to fill")
     ap.add_argument("--mat", type=float, default=36, help="framed: mat width, points")
     ap.add_argument("--mat-color", choices=["white", "black", "cream"], default="white", help="framed: mat colour")
-    ap.add_argument("--diameter", type=float, default=38, help="badges: diameter, mm (25, 32, 38, 44, 58, 75 are common)")
+    ap.add_argument("--diameter", type=float, default=25, help="badges: face diameter, mm (" + ", ".join(str(mm) for _, mm, _ in BADGE_SIZES) + " are standard)")
+    ap.add_argument("--bleed", type=float, default=5, help="badges: white pin-back margin around the badge face, mm; the cut line goes at its edge (0 for none)")
+    ap.add_argument("--white-margin", action="store_true", help="badges: leave the pin-back margin white instead of running the photo out to the cut line")
+    ap.add_argument("--half-cells", action="store_true", help="honeycomb: also show the partial cells at the page edges")
+    ap.add_argument("--no-half-tiles", action="store_true", help="brick: leave the ends of the shifted rows white")
+    ap.add_argument("--fill", action="store_true", help="honeycomb: stretch the cells to cover the whole page")
     ap.add_argument("--square", action="store_true", help="badges: square grid instead of staggered rows")
     ap.add_argument("--thumbs", type=int, default=4, help="feature: number of small photos next to the hero")
     ap.add_argument("--side", action="store_true", help="feature: small photos in a column beside the hero")

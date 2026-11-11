@@ -201,7 +201,7 @@ def test_crop_overflow_is_how_far_the_photo_sticks_out():
     assert crop_overflow(200, 100, Rect(0, 0, 100, 100), Rotation.NONE) == (100, 0)   # wide photo, square slot
     assert crop_overflow(100, 200, Rect(0, 0, 100, 100), Rotation.NONE) == (0, 100)
     assert crop_overflow(200, 100, Rect(0, 0, 100, 200), Rotation.NONE) == (300, 0)
-    assert crop_overflow(200, 100, Rect(0, 0, 100, 200)) == (0, 0)                    # AUTO turns it to fit exactly
+    assert crop_overflow(200, 100, Rect(0, 0, 100, 200)) == (300, 0)                  # AUTO never turns a cropped photo
     assert crop_overflow(100, 100, Rect(0, 0, 50, 50)) == (0, 0)                      # same shape: nothing to move
 
 
@@ -344,10 +344,10 @@ def test_framed_print_mat_photo_caption_and_colours(tmp_path):
 def test_badges_circles_do_not_overlap_stay_on_the_page_and_stagger_fits_more():
     import math
 
-    from photosheet.core.layouts import Badges
+    from photosheet.core.layouts import MM, Badges
     pg = PageExtent(595, 842)
     pg.set_margins(20, 20, 20, 20)
-    hexed, square = Badges(page=pg), Badges(page=pg, staggered=False)
+    hexed, square = Badges(page=pg, diameter=38 * MM), Badges(page=pg, diameter=38 * MM, staggered=False)
     assert hexed.per_page > square.per_page >= 20
     for b in (hexed, square):
         for i in range(b.per_page + 3):
@@ -941,3 +941,39 @@ def test_preset_ignores_keys_from_a_newer_version(tmp_path):
     d["page"]["future"] = 1
     d["images"][0]["future"] = 1
     assert preset.from_dict(d) == lay
+
+
+def test_badges_bleed_leaves_a_white_margin_inside_the_cut_ring():
+    from photosheet.core.layouts import Badges
+    kw = dict(page=PageExtent(300, 300), diameter=60, gutter=10, staggered=False, marks=True, bleed=10,
+              images=[ImageItem("a.jpg", 100, 100)])
+    b = Badges(**kw)
+    assert b.slots(0)[0][1].w == 80 and len(b.cut_guides(0)) == 96   # default: photo runs to the cut ring; face guide too
+    assert Badges(fill_margin=False, **kw).slots(0)[0][1].w == 60 and len(Badges(fill_margin=False, **kw).cut_guides(0)) == 48   # cut ring + face guide
+
+
+def test_honeycomb_fill_spans_the_page_edge_to_edge():
+    from photosheet.core.layouts import MM, Honeycomb
+    pg = PageExtent(595, 842)
+    h = Honeycomb(page=pg, size=40 * MM, fill=True)
+    for i in range(200):
+        h.add(ImageItem(f"{i}.jpg"))
+    rs = [r for _, r in h.slots(0)]
+    assert min(r.x for r in rs) == pytest.approx(0) and max(r.x + r.w for r in rs) == pytest.approx(595)
+    assert min(r.y for r in rs) == pytest.approx(0) and max(r.y + r.h for r in rs) == pytest.approx(842)
+
+
+def test_honeycomb_half_cells_fill_the_edges_and_brick_can_drop_its_halves():
+    from photosheet.core.layouts import MM, Brick, Honeycomb
+    pg = PageExtent(595, 842)
+    kw = dict(page=pg, size=40 * MM, fill=True)
+    plain, halves = Honeycomb(**kw), Honeycomb(half_cells=True, **kw)
+    assert halves.per_page > plain.per_page
+    for i in range(300):
+        halves.add(ImageItem(f"{i}.jpg"))
+    rs = [r for _, r in halves.slots(0)]
+    assert min(r.x for r in rs) >= -1e-6 and max(r.x + r.w for r in rs) <= 595 + 1e-6 and len(halves.outlines(0)) == len(rs)
+    assert Brick(page=pg, half_cells=False).per_page < Brick(page=pg).per_page
+    b = Brick(page=pg)
+    b.add(ImageItem("a.jpg"))
+    assert Brick.auto_rotate is False

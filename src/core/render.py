@@ -16,7 +16,7 @@ from PIL import Image, ImageCms, ImageChops, ImageDraw, ImageFilter, ImageFont, 
 
 from .effects import apply_effects
 from .geometry import Rect, Rotation, fit
-from .layouts import Carousel, Collage, ImageItem, Layout, Poster, Triptych
+from .layouts import Brick, Carousel, Collage, ImageItem, Layout, Poster, Triptych
 
 _SRGB = None
 
@@ -412,6 +412,17 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
     for k, (item, slot) in enumerate(slots):
         check()
         placed(k, len(slots))
+        if not layout.auto_rotate and item.rotation == -1:
+            item = replace(item, rotation=0)
+        if isinstance(layout, Brick) and slot.w < layout.tile_w - 0.5 and not item.crop:
+            # an uncropped half tile is literally half of a whole tile: same photo size as its neighbours, cut in two
+            tw, left_end = layout.tile_w, slot.x < layout.page.left + layout.page.imageable_w / 2
+            W, H, hw = round(tw * s), max(1, round(slot.h * s)), max(1, round(slot.w * s))
+            whole = Image.new("RGB", (W, H), background)
+            _place(whole, item, get(item), Rect(0, 0, tw, slot.h), s, fast)
+            x0 = W - hw if left_end else 0
+            canvas.paste(whole.crop((x0, 0, x0 + hw, H)), (round(slot.x * s), round(slot.y * s)))
+            continue
         if polys is not None and k < len(polys):
             _place_cut(canvas, item, get(item), slot, polys[k], s, fast, background, layout.feather)
             continue

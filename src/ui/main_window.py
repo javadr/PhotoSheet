@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from .. import __version__
 from ..core import preset
 from ..core.geometry import PageExtent, Rect, crop_overflow
-from ..core.layouts import (BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Brick, Calendar, Carousel, Checker, Collage, Diamond, Pyramid,
+from ..core.layouts import (BADGE_SIZES, BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Brick, Calendar, Carousel, Checker, Collage, Diamond, Pyramid,
                             Fan, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic,
                             NUp, Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs,
                             Strip, Timeline, Triptych, aspect, date_sort_key, snap_delta)
@@ -692,8 +692,16 @@ class MainWindow(QMainWindow):
         self.mat = self._spin(0, 200, 36)
         self.mat_color = QComboBox()
         self.mat_color.addItems(["White", "Black", "Cream"])
-        self.diameter = self._dspin(10, 200, 38)
-        self.diameter.setToolTip("Common pin-back badge graphics: 25, 32, 38, 44, 58 and 75 mm.")
+        self.badge_size = QComboBox()
+        self.badge_size.addItems([n for n, *_ in BADGE_SIZES] + ["Custom"])
+        self.badge_size.setToolTip("Standard pin-back button sizes. Pick one to set the diameter and a typical margin, or choose your own below.")
+        self.diameter = self._dspin(10, 200, 25)
+        self.diameter.setToolTip("Badge face diameter; any value works.")
+        self.bleed = self._dspin(0, 30, 5.0)
+        self.bleed.setToolTip("White paper around the badge face that folds behind the pin-back; the cut line sits at its edge. Picking a standard size sets a typical value (5 mm for a 25 mm badge).")
+        self.fill_margin = QCheckBox("Photo fills the margin")
+        self.fill_margin.setChecked(True)
+        self.fill_margin.setToolTip("Run the photo out to the cut line. The photo is cropped at its edges, but no white shows if the cut is off.")
         self.staggered = QCheckBox("Staggered rows")
         self.staggered.setChecked(True)
         self.thumbs = self._spin(1, 12, 4)
@@ -709,6 +717,13 @@ class MainWindow(QMainWindow):
         self.spiral_cw = QCheckBox("Clockwise")
         self.spiral_cw.setChecked(True)
         self.hex_size = self._dspin(10, 150, 40)
+        self.hex_half = QCheckBox("Half cells at the edges")
+        self.hex_half.setToolTip("Also show the partial cells that poke in from the sides, cut off at the page edge. Off leaves that space white.")
+        self.brick_half = QCheckBox("Half tiles at the row ends")
+        self.brick_half.setChecked(True)
+        self.brick_half.setToolTip("Off leaves the ends of the shifted rows white instead of filling them with half tiles.")
+        self.hex_fill = QCheckBox("Fill the page")
+        self.hex_fill.setToolTip("Widen the cells to run edge to edge and stretch them to reach the top and bottom.")
         self.cal_year = self._spin(1900, 2200, datetime.date.today().year)
         self.cal_month = QComboBox()
         self.cal_month.addItems(MONTHS)
@@ -768,17 +783,16 @@ class MainWindow(QMainWindow):
             ("fixed,passport", "Height (mm)", self.cell_h), ("passport", "Copies per photo", self.copies),
             ("fixed,passport,package,badges,honeycomb,shapes,ring,slant", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
             ("strip,filmstrip", "Frames per strip", self.frames), ("strip,filmstrip", "Strip width (mm)", self.strip_w),
-            ("strip,filmstrip", "Direction", self.direction),
-            ("strip", "Strip length (mm)", self.strip_h),
+            ("strip", "Strip length (mm)", self.strip_h), ("strip,filmstrip", "Direction", self.direction),
             ("polaroid", "Border (pt)", self.border), ("triptych", "Panels", self.panels),
             ("triptych", "", self.vertical), ("package", "Sheet", self.recipe),
             ("collage", "", self.snap), ("collage", "", self.arrange_btn), ("collage", "", self.collage_hint),
             ("framed", "Mat width (pt)", self.mat), ("framed", "Mat colour", self.mat_color),
-            ("badges", "Diameter (mm)", self.diameter), ("badges", "", self.staggered),
+            ("badges", "Badge size", self.badge_size), ("badges", "Diameter (mm)", self.diameter), ("badges", "Pin-back margin (mm)", self.bleed), ("badges", "", self.fill_margin), ("badges", "", self.staggered),
             ("feature", "Small photos", self.thumbs), ("feature", "", self.side), ("feature", "Hero size (%)", self.hero_share),
             ("bento", "Template", self.bento), ("spiral", "Photos per page", self.spiral_n),
             ("spiral", "Big photo share (%)", self.spiral_share), ("spiral", "", self.spiral_cw),
-            ("honeycomb", "Cell width (mm)", self.hex_size), ("calendar", "Year", self.cal_year),
+            ("honeycomb", "Cell width (mm)", self.hex_size), ("honeycomb", "", self.hex_fill), ("honeycomb", "", self.hex_half), ("brick", "", self.brick_half), ("calendar", "Year", self.cal_year),
             ("calendar", "First month", self.cal_month), ("calendar", "Months", self.cal_months),
             ("calendar", "Week starts on", self.cal_week), ("calendar", "Photo size (%)", self.cal_share),
             ("shapes", "Shape", self.shape_kind), ("ring", "Photos in the ring", self.ring_n), ("ring", "", self.ring_center),
@@ -794,13 +808,16 @@ class MainWindow(QMainWindow):
             if isinstance(w, SliderSpin):
                 w.set_label(label)
             self.rowsof.setdefault(key, []).append(w)
-            if any(w is x for x in (self.size_preset, self.per_sheet, self.recipe, self.arrange_btn, self.collage_hint,
+            if any(w is x for x in (self.size_preset, self.badge_size, self.per_sheet, self.recipe, self.arrange_btn, self.collage_hint,
                                    self.shuffle_btn)):
                 continue  # wired separately (presets, recipe, button) or have no value to watch
             w_changed = getattr(w, "currentIndexChanged", None) or getattr(w, "toggled", None) or w.valueChanged
             w_changed.connect(self._layout_changed)
             if w in (self.cell_w, self.cell_h):
                 w_changed.connect(self._size_edited)
+        self.badge_size.activated.connect(self._pick_badge_size)
+        self.diameter.valueChanged.connect(self._sync_badge_size)
+        self._sync_badge_size()
         side = self.style().pixelMetric(QStyle.PixelMetric.PM_LayoutLeftMargin)   # the style's own panel margin
         pinned.setContentsMargins(side, 6, side, 0)
         form.setContentsMargins(side, 6, side, 6)
@@ -885,6 +902,15 @@ class MainWindow(QMainWindow):
         self.fx_pane.fit_width()
         self._load_effects()
 
+    def _pick_badge_size(self, i):
+        if i < len(BADGE_SIZES):
+            self.diameter.setValue(BADGE_SIZES[i][1])
+            self.bleed.setValue(BADGE_SIZES[i][2])
+
+    def _sync_badge_size(self):   # show the matching standard size, or Custom
+        i = next((k for k, (_, mm, _) in enumerate(BADGE_SIZES) if abs(mm - self.diameter.value()) < 0.05), len(BADGE_SIZES))
+        self.badge_size.setCurrentIndex(i)
+
     @staticmethod
     def _dspin(lo, hi, val):
         s = QDoubleSpinBox(minimum=lo, maximum=hi, decimals=1, singleStep=1.0)
@@ -950,7 +976,7 @@ class MainWindow(QMainWindow):
         k = KEYS[self.kind.currentText()]
         for key, widgets in self.rowsof.items():
             for w in widgets:
-                visible = key == "all" or k in key.split(",")
+                visible = (key == "all" or k in key.split(",")) and not (w is self.crop and k in ("badges", "slant"))   # these always fill their shape
                 if w is self.per_sheet:   # a readout with nothing to say takes no room (no label with a blank value)
                     visible = visible and bool(self.per_sheet.text())
                 w.parentWidget().layout().setRowVisible(w, visible)
@@ -984,6 +1010,10 @@ class MainWindow(QMainWindow):
                 sp.blockSignals(True)
                 sp.setValue(v)
                 sp.blockSignals(False)
+        if kind == "Badges" and self._last_kind != "Badges":                # cut-out badges sit close together
+            self.gutter.blockSignals(True)
+            self.gutter.setValue(2)
+            self.gutter.blockSignals(False)
         if kind == "Film strip" and self._last_kind != "Film strip":        # 35 mm film: 6 frames on 35 mm
             for sp, v in ((self.strip_w, 35.0), (self.frames, 6)):
                 sp.blockSignals(True)
@@ -1040,7 +1070,8 @@ class MainWindow(QMainWindow):
                       caption=self.caption.currentText().lower())
         elif cls is Badges:
             kw = dict(diameter=self.diameter.value() * MM, gutter=self.gutter.value(),
-                      staggered=self.staggered.isChecked(), marks=self.marks.isChecked())
+                      staggered=self.staggered.isChecked(), bleed=self.bleed.value() * MM,
+                      fill_margin=self.fill_margin.isChecked(), marks=self.marks.isChecked())
         elif cls is Feature:
             kw = dict(thumbs=self.thumbs.value(), side=self.side.isChecked(),
                       hero_share=self.hero_share.value() / 100, gutter=self.gutter.value())
@@ -1053,7 +1084,7 @@ class MainWindow(QMainWindow):
             kw = dict(photos=self.spiral_n.value(), share=self.spiral_share.value() / 100,
                       clockwise=self.spiral_cw.isChecked(), gutter=self.gutter.value())
         elif cls is Honeycomb:
-            kw = dict(size=self.hex_size.value() * MM, gutter=self.gutter.value(), marks=self.marks.isChecked())
+            kw = dict(size=self.hex_size.value() * MM, gutter=self.gutter.value(), fill=self.hex_fill.isChecked(), half_cells=self.hex_half.isChecked(), marks=self.marks.isChecked())
         elif cls is Masonry:
             kw = dict(columns=self.cols.value(), gutter=self.gutter.value())
         elif cls is Shapes:
@@ -1070,7 +1101,8 @@ class MainWindow(QMainWindow):
         elif cls is Fan:
             kw = dict(photos=self.fan_n.value(), spread=self.fan_spread.value(), border=self.fan_border.value() / 100)
         elif cls is Brick:
-            kw = dict(columns=max(2, self.cols.value()), rows=self.rows.value(), gutter=self.gutter.value())
+            kw = dict(columns=max(2, self.cols.value()), rows=self.rows.value(), gutter=self.gutter.value(),
+                      half_cells=self.brick_half.isChecked())
         elif cls is Checker:
             kw = dict(columns=self.cols.value(), rows=self.rows.value(), gutter=self.gutter.value(),
                       first_empty=self.ck_empty.isChecked())
@@ -1181,6 +1213,8 @@ class MainWindow(QMainWindow):
             self.bento.setCurrentIndex(list(BENTO).index(lay.template))
         if isinstance(lay, (Masonry, Brick, Checker)):
             self.cols.setValue(lay.columns)
+        if isinstance(lay, Brick):
+            self.brick_half.setChecked(lay.half_cells)
         if isinstance(lay, (Brick, Checker, Pyramid)):
             self.rows.setValue(lay.rows)
         if isinstance(lay, Slant):
@@ -1215,6 +1249,8 @@ class MainWindow(QMainWindow):
             self.spiral_cw.setChecked(lay.clockwise)
         if isinstance(lay, Honeycomb):
             self.hex_size.setValue(lay.size / MM)
+            self.hex_fill.setChecked(lay.fill)
+            self.hex_half.setChecked(lay.half_cells)
         if isinstance(lay, Calendar):
             self.cal_year.setValue(lay.year)
             self.cal_month.setCurrentIndex(lay.month - 1)
@@ -1224,6 +1260,8 @@ class MainWindow(QMainWindow):
         if isinstance(lay, Badges):
             self.diameter.setValue(lay.diameter / MM)
             self.staggered.setChecked(lay.staggered)
+            self.bleed.setValue(lay.bleed / MM)
+            self.fill_margin.setChecked(lay.fill_margin)
         if isinstance(lay, Feature):
             self.side.setChecked(lay.side)
             self.hero_share.setValue(round(lay.hero_share * 100))

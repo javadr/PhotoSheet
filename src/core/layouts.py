@@ -9,7 +9,7 @@ import random
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
-from .geometry import PageExtent, Rect, ceil_div
+from .geometry import PageExtent, Rect, bbox, ceil_div
 
 
 @dataclass
@@ -31,6 +31,8 @@ class ImageItem:
 
     def turn(self, slot_w: float, slot_h: float) -> int:
         """Rotation enum for fitting. Auto is decided on the photo before the hand rotation, which then adds to it."""
+        if self.crop and self.rotation == -1:
+            return 0     # a cropped photo fills its slot upright
         if self.angle and self.rotation == -1:
             return 90 if (aspect(replace(self, angle=0)) > 1) != (slot_w > slot_h) else 0
         return self.rotation
@@ -78,6 +80,7 @@ class Layout:
 
     # Rendering hooks. shape "ellipse" crops every photo to a circle; the colours style captions and cards.
     shape = "rect"
+    auto_rotate = True   # False: photos fitted whole stay upright instead of turning to match their slot
     caption_color = (70, 70, 70)
 
     def shapes(self, page: int) -> list[tuple[str, Rect, tuple]]:
@@ -231,6 +234,10 @@ class Carousel(Layout):
 
 
 MM = 72 / 25.4  # points per millimetre
+# Standard pin-back button faces: (label, face mm, typical white margin mm). Faces are the usual trade sizes;
+# the margin is a typical cut-circle allowance (5 mm up to 1.75", ~0.375" above), not a supplier's exact figure.
+BADGE_SIZES = [(f'{mm} mm ({inch}")', mm, 5.0 if mm < 50 else 9.5) for inch, mm in
+               [("1", 25), ("1.25", 32), ("1.5", 38), ("1.75", 44), ("2", 51), ("2.25", 58), ("2.5", 64), ("3", 76), ("3.5", 89), ("6", 152)]]
 
 
 @lru_cache(maxsize=512)
@@ -838,19 +845,21 @@ class FramedPrint(Layout):
 class Badges(Layout):
     """Round prints for button badges, stickers or coasters: circles packed on the page, optionally staggered.
 
-    The photo is cropped to the circle. Common pin-back badge graphics: 25, 32, 38, 44, 58 and 75 mm.
+    The photo is cropped to the circle. Standard sizes are listed in BADGE_SIZES; 25 mm (1") is the default.
     """
-    diameter: float = 38 * MM
-    gutter: float = 6.0
+    diameter: float = 25 * MM
+    gutter: float = 2.0
     staggered: bool = True     # offset every other row so the circles nest (fits about 15% more)
+    bleed: float = 0.0         # pin-back margin: white paper around the badge face to fold behind it; the cut circle sits at its edge
+    fill_margin: bool = True   # run the photo out to the cut circle instead of leaving the margin white (trims the photo's edges)
     shape = "ellipse"
 
     def __post_init__(self):
-        if self.diameter <= 0 or self.gutter < 0:
-            raise ValueError("diameter must be > 0 and gutter >= 0")
+        if self.diameter <= 0 or self.gutter < 0 or self.bleed < 0:
+            raise ValueError("diameter must be > 0, gutter and bleed >= 0")
 
     def _positions(self) -> list[tuple[float, float]]:
-        p, d, g = self.page, self.diameter, self.gutter
+        p, d, g = self.page, self.diameter + 2 * self.bleed, self.gutter
         pitch = d + g
         if p.imageable_w < d or p.imageable_h < d:
             return []
@@ -876,17 +885,20 @@ class Badges(Layout):
     def slots(self, page: int):
         pos = self._positions()
         start = page * len(pos)
-        return [(img, Rect(x, y, self.diameter, self.diameter))
+        c = self.diameter + 2 * self.bleed
+        m, d = (0.0, c) if self.fill_margin else (self.bleed, self.diameter)
+        return [(img, Rect(x + m, y + m, d, d))
                 for img, (x, y) in zip(self.images[start:start + len(pos)], pos)]
 
     def cut_guides(self, page: int):
         if not self.marks:
             return []
-        out, r = [], self.diameter / 2
-        for _, c in self.slots(page):
-            cx, cy = c.x + r, c.y + r
-            pts = [(cx + r * math.cos(2 * math.pi * i / 48), cy + r * math.sin(2 * math.pi * i / 48)) for i in range(49)]
-            out += [(a[0], a[1], b[0], b[1]) for a, b in zip(pts, pts[1:])]
+        out, c = [], self.diameter + 2 * self.bleed
+        for _, f in self.slots(page):
+            cx, cy = f.x + f.w / 2, f.y + f.h / 2
+            for r in {c / 2, self.diameter / 2} if self.fill_margin else {c / 2}:   # cut line (+ the badge face when the photo runs past it)
+                pts = [(cx + r * math.cos(2 * math.pi * i / 48), cy + r * math.sin(2 * math.pi * i / 48)) for i in range(49)]
+                out += [(a[0], a[1], b[0], b[1]) for a, b in zip(pts, pts[1:])]
         return out
 
 
@@ -1067,11 +1079,25 @@ class Spiral(Layout):
         return list(zip(self.images[start:start + self.photos], self._rects()))
 
 
+def _clip_x(poly: list, x: float, keep_right: bool) -> list:
+    """A convex polygon cut at a vertical line, keeping the side to the right (or left) of it."""
+    inside = (lambda q: q[0] >= x) if keep_right else (lambda q: q[0] <= x)
+    out = []
+    for a, b in zip(poly, poly[1:] + poly[:1]):
+        if inside(a):
+            out.append(a)
+        if inside(a) != inside(b):
+            out.append((x, a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0])))
+    return out
+
+
 @dataclass
 class Honeycomb(Layout):
     """Hexagon-shaped photos nested like a honeycomb. `size` is the width across the flat sides."""
     size: float = 40 * MM
     gutter: float = 6.0
+    fill: bool = False   # widen the cells to span the page edge to edge and stretch them to reach the top and bottom
+    half_cells: bool = False   # also show the partial cells that poke in from the sides, cut off at the page edge
     shape = "hexagon"
 
     def __post_init__(self):
@@ -1082,33 +1108,68 @@ class Honeycomb(Layout):
     def cell_h(self) -> float:
         return self.size * 2 / math.sqrt(3)   # point to point
 
-    def _positions(self) -> list[tuple[float, float]]:
+    def _grid(self) -> tuple[list[tuple[float, float]], float, float]:
+        """Cell origins and the cell's (width, height); the height is stretched when `fill` is on."""
         p, g, w, h = self.page, self.gutter, self.size, self.cell_h
         pitch = w + g
         if p.imageable_w < w or p.imageable_h < h:
-            return []
+            return [], w, h
+        if self.fill:
+            w = (p.imageable_w - g * (int((p.imageable_w + g) // pitch) - 1)) / int((p.imageable_w + g) // pitch)
+            pitch, h = w + g, w * 2 / math.sqrt(3)
         row_pitch = pitch * math.sqrt(3) / 2
         rows = int((p.imageable_h - h) // row_pitch + 1e-9) + 1
-        even, odd = int((p.imageable_w + g) // pitch), int((p.imageable_w + g - pitch / 2) // pitch)
+        even, odd = int((p.imageable_w + g) / pitch + 1e-9), int((p.imageable_w + g - pitch / 2) / pitch + 1e-9)
         counts = [even if r % 2 == 0 else odd for r in range(rows)]
         offs = [pitch / 2 if r % 2 else 0.0 for r in range(rows)]
         block_w = max((o + n * pitch - g for o, n in zip(offs, counts) if n), default=0.0)
         x0 = p.left + (p.imageable_w - block_w) / 2
+        if self.fill:
+            k = p.imageable_h / ((rows - 1) * row_pitch + h)
+            h, row_pitch = h * k, row_pitch * k
         y0 = p.top + (p.imageable_h - ((rows - 1) * row_pitch + h)) / 2
-        return [(x0 + offs[r] + c * pitch, y0 + r * row_pitch) for r in range(rows) for c in range(counts[r])]
+        return [(x0 + offs[r] + c * pitch, y0 + r * row_pitch) for r in range(rows) for c in range(counts[r])], w, h
+
+    def _positions(self) -> list[tuple[float, float]]:
+        return self._grid()[0]
 
     @property
     def per_page(self) -> int:
-        return len(self._positions())
+        return len(self._cells())
 
     @property
     def pages(self) -> int:
         return max(1, ceil_div(len(self.images), self.per_page)) if self.per_page else 1
 
+    def _cells(self) -> list[tuple[Rect, list | None]]:
+        """Every cell's rectangle and, with half_cells, its outline (a hexagon clipped to the page edges)."""
+        pos, w, h = self._grid()
+        if not self.half_cells or not pos:
+            return [(Rect(x, y, w, h), None) for x, y in pos]
+        p, pitch = self.page, w + self.gutter
+        left, right = p.left, p.left + p.imageable_w
+        out = []
+        for y in sorted({y for _, y in pos}):
+            first = min(x for x, yy in pos if yy == y)
+            k = -math.ceil((first - left) / pitch) - 1
+            while first + k * pitch < right:
+                x = first + k * pitch
+                k += 1
+                hexa = [(x + w / 2, y), (x + w, y + h / 4), (x + w, y + 3 * h / 4), (x + w / 2, y + h),
+                        (x, y + 3 * h / 4), (x, y + h / 4)]
+                poly = _clip_x(_clip_x(hexa, left, True), right, False)
+                if poly and max(q[0] for q in poly) - min(q[0] for q in poly) >= 0.2 * w:
+                    out.append((bbox(poly), poly))
+        return out
+
     def slots(self, page: int):
-        pos = self._positions()
-        start = page * len(pos)
-        return [(img, Rect(x, y, self.size, self.cell_h)) for img, (x, y) in zip(self.images[start:start + len(pos)], pos)]
+        cells = self._cells()
+        start = page * len(cells)
+        return [(img, r) for img, (r, _) in zip(self.images[start:start + len(cells)], cells)]
+
+    def outlines(self, page: int):
+        cells = self._cells()
+        return [poly for _, poly in cells] if self.half_cells and cells else None
 
     def cut_guides(self, page: int):
         if not self.marks:
@@ -1561,10 +1622,16 @@ class Brick(Layout):
     columns: int = 5
     rows: int = 5
     gutter: float = 6.0
+    auto_rotate = False        # a narrow half tile would turn every landscape photo on its side
+    half_cells: bool = True    # the half tiles at both ends of the shifted rows; off leaves that space white
 
     def __post_init__(self):
         if self.columns < 2 or self.rows < 1 or self.gutter < 0:
             raise ValueError("columns must be >= 2, rows >= 1 and gutter >= 0")
+
+    @property
+    def tile_w(self) -> float:
+        return (self.page.imageable_w - self.gutter * (self.columns - 1)) / self.columns
 
     def _rects(self) -> list[Rect]:
         p, g, c, r = self.page, self.gutter, self.columns, self.rows
@@ -1577,9 +1644,11 @@ class Brick(Layout):
                 out += [Rect(p.left + col * (tw + g), y, tw, th) for col in range(c)]
             else:
                 shift = (tw + g) / 2
-                out.append(Rect(p.left, y, half, th))
+                if self.half_cells:
+                    out.append(Rect(p.left, y, half, th))
                 out += [Rect(p.left + shift + col * (tw + g), y, tw, th) for col in range(c - 1)]
-                out.append(Rect(p.left + p.imageable_w - half, y, half, th))
+                if self.half_cells:
+                    out.append(Rect(p.left + p.imageable_w - half, y, half, th))
         return out
 
     @property
@@ -1603,6 +1672,7 @@ class Timeline(Layout):
     EXIF data (the file name is shown if a photo has none). Photos appear in list order: use Edit > Sort Photos
     by Date to put them in time order.
     """
+    auto_rotate = False   # a photo is never turned on its side to suit its slot
     photos: int = 6
     dates: bool = True
     gutter: float = 8.0

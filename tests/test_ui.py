@@ -465,9 +465,9 @@ def test_center_photo_resets_framing_and_passport_can_pan(app, tmp_path):
     slots = w._slots_now()
     c = w._slot_rect(slots[0][1]).center()
     _mouse(app, w, "press", c)
-    _mouse(app, w, "move", c + QPointF(0, -20))               # auto-rotated photo in a portrait cell: only vertical room
-    assert w._pan is not None and w.layout_.images[0].vpan != 0.5 and w.layout_.images[0].hpan == 0.5
-    _mouse(app, w, "release", c + QPointF(0, -20))
+    _mouse(app, w, "move", c + QPointF(-20, 0))               # upright photo in a portrait cell: only horizontal room
+    assert w._pan is not None and w.layout_.images[0].hpan != 0.5 and w.layout_.images[0].vpan == 0.5
+    _mouse(app, w, "release", c + QPointF(-20, 0))
 
 
 def _carousel_window(app, tmp_path, n=4):
@@ -1509,3 +1509,16 @@ def test_collage_rotate_handle_turns_the_box_and_undoes(app, tmp_path):
     assert it.angle == 90
     w.undo_stack.undo()
     assert w.layout_.images[0].angle == 0
+
+
+def test_badge_size_presets_set_diameter_and_fall_back_to_custom(app):
+    from photosheet.core.layouts import BADGE_SIZES, MM
+    w = MainWindow()
+    w.kind.setCurrentText("Badges")
+    assert w.badge_size.currentText().startswith("25")
+    i = next(k for k, (_, mm, _) in enumerate(BADGE_SIZES) if mm == 32)
+    w.badge_size.setCurrentIndex(i)
+    w.badge_size.activated.emit(i)
+    assert w.diameter.value() == 32 and w.layout_.diameter == pytest.approx(32 * MM)
+    w.diameter.setValue(40)
+    assert w.badge_size.currentText() == "Custom"

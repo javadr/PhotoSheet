@@ -43,8 +43,13 @@ class Fit:
     scale: float
 
 
-def _oriented(src_w: float, src_h: float, target: Rect, rotation: Rotation) -> tuple[float, float, Rotation]:
-    """Source size as drawn (after any rotation) and the rotation actually used."""
+def _oriented(src_w: float, src_h: float, target: Rect, rotation: Rotation,
+              crop: bool = True) -> tuple[float, float, Rotation]:
+    """Source size as drawn (after any rotation) and the rotation actually used.
+
+    AUTO only turns a photo that is being fitted whole; a cropped photo fills its slot upright instead."""
+    if rotation == Rotation.AUTO and crop:
+        rotation = Rotation.NONE
     if rotation == Rotation.AUTO:
         rotation = Rotation.R90 if (src_w > src_h) != (target.w > target.h) else Rotation.NONE
     if rotation in (Rotation.R90, Rotation.R270):
@@ -65,11 +70,11 @@ def fit(src_w: float, src_h: float, target: Rect, crop: bool = False,
 
     crop=False: scale to fit inside, centred. crop=True: scale to cover, panned by
     hpan/vpan (0..1, 0.5 = centred). AUTO rotation turns the image 90 deg when its
-    orientation differs from the slot's.
+    orientation differs from the slot's (not when cropping: a cropped photo stays upright).
     shortcut: reimplemented from usage (original library source unavailable), so
     rounding may differ from PhotoPrint by a pixel; verify against real output.
     """
-    src_w, src_h, rotation = _oriented(src_w, src_h, target, rotation)
+    src_w, src_h, rotation = _oriented(src_w, src_h, target, rotation, crop)
     s = max(target.w / src_w, target.h / src_h) if crop else min(target.w / src_w, target.h / src_h)
     w, h = round(src_w * s), round(src_h * s)
     if crop:
