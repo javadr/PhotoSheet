@@ -89,6 +89,23 @@ def test_proxy_is_capped_and_full_load_untouched(tmp_path):
     item = ImageItem(str(big))
     assert max(render.load(item, proxy=True).size) == render.PROXY_SIDE
     assert render.load(item).size == (5000, 2500)
+    assert render.load(item, proxy=True, side=100).size == (256, 128)   # 100 -> bucket 128; short side covers it
+    assert render.load(item, side=100).size == (5000, 2500)              # final output ignores the hint
+
+
+def test_preview_badges_use_prefetched_small_copies(tmp_path, monkeypatch):
+    from photosheet.core import render
+    from photosheet.core.layouts import Badges
+    big = tmp_path / "big.png"
+    Image.new("RGB", (3000, 2000), (10, 20, 30)).save(big)
+    lay = Badges(page=PageExtent(300, 300))
+    lay.images = [ImageItem(str(big)) for _ in range(lay.per_page)]
+    sizes = []
+    real = render._load
+    monkeypatch.setattr(render, "_load", lambda *a: sizes.append(real(*a).size) or real(*a))
+    render._CACHE.clear()
+    render_page(lay, 0, 72, fast=True)
+    assert len(sizes) == lay.per_page and max(max(s) for s in sizes) < 256   # each photo loaded once, small
 
 
 def test_fixed_and_mosaic_render_and_cli(red, tmp_path):

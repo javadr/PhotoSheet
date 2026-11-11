@@ -35,34 +35,37 @@ _CACHE_PIXELS = 100_000_000  # budget across cached images, roughly 300 MB of RG
 PROXY_SIDE = 2400  # longest side of the cached preview copy
 
 
-def _key(item: ImageItem, printer_profile, proxy: bool) -> tuple:
+def _key(item: ImageItem, printer_profile, proxy: bool, side: int | None = None) -> tuple:
     try:
         mtime = os.stat(item.path).st_mtime_ns
     except OSError:
         mtime = 0
     return (item.path, mtime, item.profile, item.intent, item.flip_h, item.flip_v, item.angle,
-            repr(item.effects), printer_profile, proxy)
+            repr(item.effects), printer_profile, proxy, side)
 
 
 def uncached(items, printer_profile: str | None = None, proxy: bool = True) -> int:
     """How many of these photos load() would have to read from disk."""
-    with _CACHE_LOCK:
-        return len({_key(i, printer_profile, proxy) for i in items} - _CACHE.keys())
+    with _CACHE_LOCK:   # any cached size counts: this only drives a "loading photos" notice
+        return len({_key(i, printer_profile, proxy)[:-1] for i in items} - {k[:-1] for k in _CACHE})
 
 
-def load(item: ImageItem, printer_profile: str | None = None, proxy: bool = False) -> Image.Image:
+def load(item: ImageItem, printer_profile: str | None = None, proxy: bool = False,
+         side: float | None = None) -> Image.Image:
     """Cached _load(). The returned image is shared: callers must not modify it in place.
 
     proxy=True returns a copy capped at PROXY_SIDE for fast previews.
     shortcut: a preview at more than ~PROXY_SIDE px per photo (huge zoom on a 1-up page)
     is slightly soft; raise PROXY_SIDE or render without fast=True if that matters.
+    side (proxy only): the slot's longest side in pixels; the copy is then only as big as filling that slot needs.
     """
-    key = _key(item, printer_profile, proxy)
+    side = _bucket(side) if proxy and side else None
+    key = _key(item, printer_profile, proxy, side)
     with _CACHE_LOCK:
         if key in _CACHE:
             _CACHE.move_to_end(key)
             return _CACHE[key]
-    im = _load(item, printer_profile, PROXY_SIDE if proxy else None)
+    im = _load(item, printer_profile, PROXY_SIDE if proxy else None, side)
     if im.width * im.height <= _CACHE_PIXELS:
         with _CACHE_LOCK:
             _CACHE[key] = im
@@ -71,15 +74,24 @@ def load(item: ImageItem, printer_profile: str | None = None, proxy: bool = Fals
     return im
 
 
+def _bucket(side: float) -> int:
+    """Round a pixel size up to a power of two (at least 64), so small zoom steps reuse the cached copy."""
+    return 1 << max(6, math.ceil(math.log2(max(1.0, side))))
+
+
 class Cancelled(Exception):
     """Raised inside render_page when its cancel() callback says stop."""
 
 
-def _prefetch(items, printer_profile, fast, progress=None, cancel=None):
+def _prefetch(items, printer_profile, fast, progress=None, cancel=None, sides=None):
     """Decode and colour-manage the photos in parallel (Pillow and lcms release the GIL).
     Returns get(item): the photo from this call, so a small cache cannot throw it out before it is drawn.
-    progress(done, total) is called from worker threads as each photo finishes."""
+    progress(done, total) is called from worker threads as each photo finishes.
+    sides: each item's slot size in pixels (parallel to items), so previews load photos no bigger than needed."""
     todo = list({id(i): i for i in items}.values())
+    side = {}
+    for i, sd in zip(items, sides or []):   # a photo used twice loads at its largest slot
+        side[id(i)] = max(side.get(id(i), 0), sd)
     done = [0]
     got = {}
 
@@ -87,7 +99,7 @@ def _prefetch(items, printer_profile, fast, progress=None, cancel=None):
         if cancel and cancel():
             return   # queued photos are skipped; the ones already decoding finish
         try:
-            got[id(item)] = load(item, printer_profile, fast)
+            got[id(item)] = load(item, printer_profile, fast, side.get(id(item)))
         except Exception:
             pass  # get() loads it again serially, where the error belongs
         done[0] += 1   # shortcut: unlocked counter, an off-by-one in a progress label is harmless
@@ -101,7 +113,7 @@ def _prefetch(items, printer_profile, fast, progress=None, cancel=None):
             list(ex.map(one, todo))
     elif todo:
         one(todo[0])
-    return lambda item: got.get(id(item)) or load(item, printer_profile, fast)
+    return lambda item: got.get(id(item)) or load(item, printer_profile, fast, side.get(id(item)))
 
 
 def _embedded(data):
@@ -112,9 +124,13 @@ def _embedded(data):
         return None
 
 
-def _load(item: ImageItem, printer_profile: str | None = None, max_side: int | None = None) -> Image.Image:
-    """Open, orient, colour-manage to RGB, flip and apply effects. max_side shrinks first, so previews skip the heavy work."""
+def _load(item: ImageItem, printer_profile: str | None = None, max_side: int | None = None,
+          fill: int | None = None) -> Image.Image:
+    """Open, orient, colour-manage to RGB, flip and apply effects. max_side shrinks first, so previews skip the heavy work.
+    fill: shrink further, to just enough to cover a fill x fill slot either way up (short side >= fill)."""
     im = Image.open(item.path)
+    if fill and max_side:
+        max_side = min(max_side, math.ceil(fill * max(im.size) / max(1, min(im.size))))
     if max_side and max(im.size) > max_side:
         r = max_side / max(im.size)
         im.draft(None, (math.ceil(im.width * r), math.ceil(im.height * r)))   # JPEG decodes at 1/2, 1/4, 1/8 size for free
@@ -175,8 +191,9 @@ def _unit_poly(shape: str):
     return [((x - x0) / (x1 - x0), (y - y0) / (y1 - y0)) for x, y in pts]   # fill the whole box
 
 
+@lru_cache(maxsize=32)
 def _mask(shape: str, w: int, h: int) -> Image.Image:
-    """An 'L' mask of a shape, drawn 4x larger and shrunk for a smooth edge."""
+    """An 'L' mask of a shape, drawn 4x larger and shrunk for a smooth edge. Cached: callers must not modify it."""
     W, H = w * 4, h * 4
     m = Image.new("L", (W, H), 0)
     d, poly = ImageDraw.Draw(m), _unit_poly(shape)
@@ -407,11 +424,14 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         return canvas
     polys = layout.outlines(page)
     slots = layout.slots(page)
-    get = _prefetch([i for i, _ in slots], printer_profile, fast, progress, cancel)
+    # Brick draws a half tile from a whole one, wider than its slot: it keeps the full preview copy
+    sides = None if isinstance(layout, Brick) else [max(r.w, r.h) * s for _, r in slots]
+    get = _prefetch([i for i, _ in slots], printer_profile, fast, progress, cancel, sides)
     check()
     for k, (item, slot) in enumerate(slots):
         check()
         placed(k, len(slots))
+        photo = get(item)   # before item is replaced below: get() looks photos up by the original item
         if not layout.auto_rotate and item.rotation == -1:
             item = replace(item, rotation=0)
         if isinstance(layout, Brick) and slot.w < layout.tile_w - 0.5 and not item.crop:
@@ -419,24 +439,24 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
             tw, left_end = layout.tile_w, slot.x < layout.page.left + layout.page.imageable_w / 2
             W, H, hw = round(tw * s), max(1, round(slot.h * s)), max(1, round(slot.w * s))
             whole = Image.new("RGB", (W, H), background)
-            _place(whole, item, get(item), Rect(0, 0, tw, slot.h), s, fast)
+            _place(whole, item, photo, Rect(0, 0, tw, slot.h), s, fast)
             x0 = W - hw if left_end else 0
             canvas.paste(whole.crop((x0, 0, x0 + hw, H)), (round(slot.x * s), round(slot.y * s)))
             continue
         if polys is not None and k < len(polys):
-            _place_cut(canvas, item, get(item), slot, polys[k], s, fast, background, layout.feather)
+            _place_cut(canvas, item, photo, slot, polys[k], s, fast, background, layout.feather)
             continue
         if round_photos:
             item = replace(item, crop=True)   # a circle is always filled
         if layout.feather:   # draw on a transparent tile, soften its edge, then lay it over what is already there
             w, h = max(1, round(slot.w * s)), max(1, round(slot.h * s))
             tile = Image.new("RGBA", (w, h), (255, 255, 255, 0))   # white, not black: a soft edge must not pick up a dark fringe
-            _place(tile, item, get(item), Rect(0, 0, slot.w, slot.h), s, fast,
+            _place(tile, item, photo, Rect(0, 0, slot.w, slot.h), s, fast,
                    shape=layout.shape if round_photos else None)
             tile.putalpha(_fade(tile.getchannel("A"), layout.feather * s / 2))
             canvas.paste(tile, (round(slot.x * s), round(slot.y * s)), tile)
             continue
-        _place(canvas, item, get(item), slot, s, fast, shape=layout.shape if round_photos else None)
+        _place(canvas, item, photo, slot, s, fast, shape=layout.shape if round_photos else None)
     if round_photos:
         guides()   # a cut circle must show on top of the photo's edge
     for text, band, *color in layout.captions(page):   # a layout may colour single captions (calendar weekends)
