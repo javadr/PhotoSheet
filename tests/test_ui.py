@@ -297,7 +297,11 @@ def test_drag_photo_onto_another_swaps_them_and_undoes(app, tmp_path):
     _mouse(app, w, "move", c)
     assert [k for _, k in w.preview.overlay] == ["src", "dst"]
     _mouse(app, w, "release", c)
-    assert names() == ["2.png", "1.png", "0.png"] and not w.preview.overlay
+    assert names() == ["2.png", "1.png", "0.png"]
+    assert not w.preview.overlay                               # drag feedback gone; no outline on the stale page
+    while w._stale:
+        app.processEvents()
+    assert [k for _, k in w.preview.overlay] == ["pick"]        # the selected photo is outlined on the new render
     assert w.undo_act.text() == "Undo Move Image" and w.list.currentRow() == 2
     w.undo_stack.undo()
     assert names() == ["0.png", "1.png", "2.png"]
@@ -693,7 +697,7 @@ def test_collage_corner_handle_resizes_keeping_shape_or_free_with_shift(app, tmp
     w = _collage_window(app, tmp_path)
     k = _scale(w)
     w.list.setCurrentRow(0)
-    assert [kind for _, kind in w.preview.overlay].count("handle") == 4 and w.preview.overlay[0][1] == "sel"
+    assert [kind for _, kind in w.preview.overlay].count("handle") == 4 and w.preview.overlay[-1][1] == "rot"
     br = w._slot_rect(dict(w._slots_now())[0]).bottomRight()
     _mouse(app, w, "press", br)
     _mouse(app, w, "move", br + QPointF(20, 2))
@@ -1549,3 +1553,19 @@ def test_a_single_image_gets_no_number_or_total(app, tmp_path):
     opt = QStyleOptionViewItem()
     w.list.itemDelegate().initStyleOption(opt, w.list.model().index(0, 0))
     assert w.image_dock.windowTitle() == "Images" and not opt.text.startswith("1.")
+
+
+def test_selection_outline_follows_a_zoom_at_once_and_survives_the_rerender(app, tmp_path):
+    import time
+    w = _ready_window(app, tmp_path)
+    while w._stale:
+        app.processEvents()
+    w.list.setCurrentRow(1)
+    slot = lambda: dict(w._slots_now())[1]
+    w.set_zoom(w._fit_zoom() * 1.6)
+    app.processEvents()                                         # the scroll area resizes the page widget
+    assert w.preview.overlay and w.preview.overlay[0][0] == w._shape(1, slot())   # on the photo, not where it used to be
+    t = time.time() + 5
+    while w._fit_timer.isActive() or (w._base_zoom != w.zoom and time.time() < t):
+        app.processEvents()
+    assert w.preview.overlay and w.preview.overlay[0][0] == w._shape(1, slot())   # still there after the sharp render

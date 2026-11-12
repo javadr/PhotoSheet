@@ -12,7 +12,7 @@ import random
 from PIL import Image
 from PySide6 import __version__ as PYSIDE_VERSION
 from PySide6.QtCore import QSize, qVersion, QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
+from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPainterPath, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QStyledItemDelegate, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
@@ -27,7 +27,7 @@ from ..core.layouts import (BADGE_SIZES, BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES
                             Fan, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic,
                             NUp, Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs,
                             Strip, Timeline, Triptych, aspect, date_sort_key, snap_delta)
-from ..core.render import Cancelled, render_page, save_pages, uncached
+from ..core.render import Cancelled, _unit_poly, render_page, save_pages, uncached
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
          "4 × 6 in": (288, 432), "5 × 7 in": (360, 504), "8 × 10 in": (576, 720)}   # portrait points; Orientation turns them
@@ -322,7 +322,7 @@ class SliderSpin(QWidget):
         super().__init__()
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(lo, hi)
-        self.slider.setMinimumWidth(70)
+        self.slider.setMinimumWidth(36)
         self.spin = QSpinBox(minimum=lo, maximum=hi, suffix=suffix)
         self.spin.setValue(value)
         self.slider.setValue(value)
@@ -417,11 +417,13 @@ class ScrollPane(QWidget):
 
     def fit_width(self):
         """Wide enough for the content and a vertical scroll bar, so the bar never covers a control."""
+        for lab in self.content.findChildren(QLabel):   # label widths come from a shared group: drop their cached hints
+            lab.updateGeometry()
         lay = self.content.layout()
         if lay:
             lay.invalidate()
             lay.activate()
-        self.area.setMinimumWidth(self.content.sizeHint().width() + self.area.verticalScrollBar().sizeHint().width() + 4)
+        self.area.setMinimumWidth(self.content.minimumSizeHint().width() + self.area.verticalScrollBar().sizeHint().width() + 4)
 
     def scroll_to_top(self):
         self.area.verticalScrollBar().setValue(0)
@@ -435,7 +437,7 @@ class _LabelGroup:
         self.labels: list[QLabel] = []
 
     def width(self) -> int:
-        return max((QLabel.sizeHint(l).width() for l in self.labels), default=0)
+        return max((QLabel.sizeHint(l).width() for l in self.labels if not l.isHidden()), default=0)   # hidden rows (other layouts' options) take no width
 
     def label(self, text: str) -> QLabel:
         lab = _GroupLabel(text, self)
@@ -480,8 +482,8 @@ class _PageLabel(QLabel):
             if kind == "src":
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(QColor(0, 0, 0, 90))
-            elif kind == "sel":                      # outline of the selected Collage photo
-                p.setPen(QPen(hl, 2))
+            elif kind in ("sel", "pick"):            # "sel": the Collage photo being edited (blue); "pick": a selected photo (red)
+                p.setPen(QPen(QColor(230, 0, 0) if kind == "pick" else hl, 3))
                 p.setBrush(Qt.BrushStyle.NoBrush)
             elif kind == "rot":                      # the rotate knob: a round handle
                 p.setPen(QPen(QColor(255, 255, 255), 1))
@@ -510,6 +512,7 @@ class MainWindow(QMainWindow):
         self.layout_ = NUp(page=PageExtent(*PAGES["A4"]))
         self.layout_.page.set_margins(18, 18, 18, 18)
         self.page_no, self._gen, self._loading = 0, 0, False
+        self._stale = False   # a render is pending: the page on screen is not this layout's, so draw no outline on it
         self.sig = _Signals()
         self.sig.done.connect(self._on_rendered)
         self.sig.progress.connect(self._on_progress)
@@ -532,7 +535,7 @@ class MainWindow(QMainWindow):
         self.scroll.viewport().installEventFilter(self)
         self._base, self._base_zoom, self._pending_zoom, self._dpr = None, 1.0, 1.0, 1.0
         self._fit_timer = QTimer(self, singleShot=True, interval=120)  # settles zoom/resize into one real render
-        self._fit_timer.timeout.connect(self.refresh)
+        self._fit_timer.timeout.connect(lambda: self.refresh(keep_overlay=True))
         central = QWidget()
         self._central_layout = QVBoxLayout(central)
         self._central_layout.setContentsMargins(0, 0, 0, 0)
@@ -894,6 +897,7 @@ class MainWindow(QMainWindow):
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.list.model().rowsMoved.connect(self._reordered)
         self.list.currentRowChanged.connect(self._load_effects)
+        self.list.itemSelectionChanged.connect(self._refresh_overlay)
         self.list.currentRowChanged.connect(lambda *_: self._refresh_overlay())
         add, rem, clear = QPushButton("Add…"), QPushButton("Remove"), QPushButton("Remove All")
         add.clicked.connect(self.add_images)
@@ -927,6 +931,8 @@ class MainWindow(QMainWindow):
             a.toggled.connect(self._effects_changed)
             b.toggled.connect(self._effects_changed)
         form.addRow(checks)
+        for b in (add, rem, clear, ccw, cw):   # the style's 80 px minimum is wider than the text; only the text and a little padding are needed
+            b.setMinimumWidth(b.fontMetrics().horizontalAdvance(b.text()) + 20)
         row = QHBoxLayout()
         row.addWidget(add)
         row.addWidget(rem)
@@ -1028,6 +1034,8 @@ class MainWindow(QMainWindow):
                 if w is self.per_sheet:   # a readout with nothing to say takes no room (no label with a blank value)
                     visible = visible and bool(self.per_sheet.text())
                 w.parentWidget().layout().setRowVisible(w, visible)
+        for lab in self._pinned_form.parentWidget().findChildren(QLabel):   # the pinned rows share the label column
+            lab.updateGeometry()
         self.layout_pane.fit_width()
         if self._scrolled_kind != k:                       # a different layout starts at the top of its options
             self._scrolled_kind = k
@@ -1511,7 +1519,28 @@ class MainWindow(QMainWindow):
         if isinstance(self.layout_, Carousel):
             return self._carousel_shapes()[0][idx]
         cut = self._cut_polygons()
-        return cut.get(idx) or self._slot_rect(rect)
+        if idx in cut:
+            return cut[idx]
+        box, lay = self._slot_rect(rect), self.layout_
+        if hasattr(lay, "pile"):   # Scatter, Fan: the tilted card
+            for it, _, card, ang in lay.pile(self.page_no):
+                if it is lay.images[idx]:
+                    c, t = self._slot_rect(card), math.radians(ang)
+                    m, n = c.center(), (math.cos(t), math.sin(t))
+                    return QPolygonF([QPointF(m.x() + dx * n[0] + dy * n[1], m.y() - dx * n[1] + dy * n[0])
+                                      for dx, dy in ((-c.width() / 2, -c.height() / 2), (c.width() / 2, -c.height() / 2),
+                                                     (c.width() / 2, c.height() / 2), (-c.width() / 2, c.height() / 2))])
+        if lay.shape == "ellipse":
+            return QPolygonF([QPointF(box.center().x() + box.width() / 2 * math.cos(a), box.center().y() + box.height() / 2 * math.sin(a))
+                              for a in (math.tau * i / 64 for i in range(64))])
+        if lay.shape == "rounded":   # same corner radius as the renderer's mask
+            path = QPainterPath()
+            path.addRoundedRect(box, min(box.width(), box.height()) * 0.22, min(box.width(), box.height()) * 0.22)
+            return path.toFillPolygon()
+        poly = _unit_poly(lay.shape)   # hexagon, heart, star...
+        if poly:
+            return QPolygonF([QPointF(box.x() + x * box.width(), box.y() + y * box.height()) for x, y in poly])
+        return box
 
     def _slot_at(self, pos):
         slots = self._slots_now()
@@ -1643,19 +1672,33 @@ class MainWindow(QMainWindow):
             (QRectF(pt.x() - HANDLE, pt.y() - HANDLE, 2 * HANDLE, 2 * HANDLE), "handle") for pt in pts] + [
             (QRectF(knob.x() - HANDLE - 1, knob.y() - HANDLE - 1, 2 * HANDLE + 2, 2 * HANDLE + 2), "rot")]
 
+    def _others_overlay(self, skip) -> list:
+        """Red outlines (turned by each photo's own angle) for the other photos selected in the list, not all of them."""
+        out, picked = [], {self.list.row(it) for it in self.list.selectedItems()}
+        for i, r in self._slots_now():
+            it = self.layout_.images[i]
+            if it is not skip and i in picked:
+                q = self._box_corners(it, r)
+                out.append((QPolygonF([q[0], q[1], q[3], q[2]]), "pick"))
+        return out
+
     def _on_rot_handle(self, pos, item, slot) -> bool:
         k = self._rot_handle(item, slot)[1]
         return abs(pos.x() - k.x()) <= HANDLE + 4 and abs(pos.y() - k.y()) <= HANDLE + 4
 
     def _refresh_overlay(self):
-        """Selection outline and resize handles for the selected Collage photo."""
-        if not isinstance(self.layout_, Collage) or self._cl:
+        """Outline every selected photo; the current Collage photo also gets resize handles."""
+        if self._cl or self._stale:
             return
         ov = []
         slots = dict(self._slots_now())
         row = self.list.currentRow()
-        if row in slots:
-            ov = self._sel_overlay(self.layout_.images[row], slots[row])
+        if isinstance(self.layout_, Collage):
+            if row in slots:
+                cur = self.layout_.images[row]
+                ov = self._others_overlay(cur) + self._sel_overlay(cur, slots[row])
+        else:   # a few outlines painted over the finished render: no re-render
+            ov = [(self._shape(i, slots[i]), "pick") for i in sorted({self.list.row(it) for it in self.list.selectedItems()}) if i in slots]
         self.preview.overlay = ov
         self.preview.update()
 
@@ -1724,7 +1767,7 @@ class MainWindow(QMainWindow):
             ncx, ncy = cx0 + lx * co - ly * si, cy0 + lx * si + ly * co
             new = lay.clamp((ncx - nw / 2, ncy - nh / 2, nw, nh), ang)
         cl["item"].box = tuple(new)
-        ov = self._sel_overlay(cl["item"], Rect(*new))
+        ov = self._others_overlay(cl["item"]) + self._sel_overlay(cl["item"], Rect(*new))
         p = lay.page
         top, bottom = self._pt_to_widget(0, 0), self._pt_to_widget(p.width, p.height)
         if snap:                                                # draw the guide lines that were hit
@@ -1857,6 +1900,8 @@ class MainWindow(QMainWindow):
 
     def eventFilter(self, obj, ev):
         if obj is self.preview:
+            if ev.type() == QEvent.Type.Resize:   # the scroll area resizes the page after a zoom: re-place the outlines on it
+                self._refresh_overlay()
             return self._page_mouse(ev) if isinstance(ev, QMouseEvent) else False
         if obj is self.scroll.viewport():
             if (ev.type() == QEvent.Type.Wheel and ev.angleDelta().y()
@@ -1923,7 +1968,8 @@ class MainWindow(QMainWindow):
     def _place_busy(self):
         self.busy.move((self.scroll.viewport().width() - self.busy.width()) // 2, 12)
 
-    def refresh(self):
+    def refresh(self, keep_overlay=False):
+        """Re-render the page. keep_overlay: only the zoom changed, so the outlines on the stretched page stay right."""
         self.page_no = max(0, min(self.page_no, self.layout_.pages - 1))
         self.page_label.setText(f" {self.page_no + 1} / {self.layout_.pages} ")
         for btn, step in self._nav_btns:   # dim the controls that can't go further
@@ -1931,6 +1977,9 @@ class MainWindow(QMainWindow):
         if isinstance(self.layout_, Collage):
             self.layout_.slots(0)   # place new photos here, on the UI thread, before the render thread reads them
         self._gen += 1
+        if not keep_overlay and not isinstance(self.layout_, Collage):   # Collage keeps its live overlay
+            self._stale = True
+            self.preview.overlay = []
         dpr = self.devicePixelRatioF()
         z = self.zoom if self.zoom is not None else self._fit_zoom()
         self._dpr, self._pending_zoom = dpr, z
@@ -1957,6 +2006,7 @@ class MainWindow(QMainWindow):
             self.statusBar().hide()
             self._base, self._base_zoom = res, self._pending_zoom
             self.preview.setPixmap(self._paper(res, self._dpr))
+            self._stale = False
             self._refresh_overlay()
 
     # ---- files ----
