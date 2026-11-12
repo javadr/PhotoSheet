@@ -1558,14 +1558,14 @@ class MainWindow(QMainWindow):
             return []
 
     def _carousel_shapes(self):
-        """{image index: wedge polygon in widget coordinates}, plus the order the wedges are painted in."""
+        """{image index: wedge polygon in widget coordinates}, plus [(index, polygon)] bottom to top."""
         z = self.zoom if self.zoom is not None else self._fit_zoom()
         k = self.SCREEN_DPI * z / 72
         origin = self._slot_rect(Rect(0, 0, 0, 0)).topLeft()
         wedges = self.layout_.wedges()
-        shapes = {i: QPolygonF([QPointF(origin.x() + x * k, origin.y() + y * k) for x, y in poly])
-                  for i, (_, poly, _) in enumerate(wedges)}
-        return shapes, [*range(0, len(wedges), 2), *range(1, len(wedges), 2)]   # evens first, odds on top
+        to_widget = lambda poly: QPolygonF([QPointF(origin.x() + x * k, origin.y() + y * k) for x, y in poly])
+        shapes = {i: to_widget(poly) for i, (_, poly, _) in enumerate(wedges)}
+        return shapes, [(i, to_widget(poly)) for i, poly in self.layout_.layers()]
 
     def _cut_polygons(self):
         """{image index: outline in widget coordinates} for layouts that cut photos to polygons, else {}."""
@@ -1610,10 +1610,9 @@ class MainWindow(QMainWindow):
         slots = self._slots_now()
         if isinstance(self.layout_, Carousel) and slots:
             # wedges overlap: the one painted last (on top) wins, like what the user sees
-            shapes, paint_order = self._carousel_shapes()
             by_idx = dict(slots)
-            for i in reversed(paint_order):
-                if i in by_idx and shapes[i].containsPoint(pos, Qt.FillRule.OddEvenFill):
+            for i, shape in reversed(self._carousel_shapes()[1]):
+                if i in by_idx and shape.containsPoint(pos, Qt.FillRule.OddEvenFill):
                     return i, by_idx[i]
             return None
         cut = self._cut_polygons()

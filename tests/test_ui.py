@@ -502,8 +502,8 @@ def test_carousel_hit_test_uses_wedges_and_the_top_wedge_wins_in_overlaps(app, t
     ang = _carousel_points(w)
     for i in range(4):
         assert w._slot_at(ang(45 + 90 * i))[0] == i             # the middle of each wedge picks that wedge
-    # at every seam two wedges overlap (30 degrees); the odd wedge is painted last, so it is the one you see and grab
-    assert [w._slot_at(ang(a))[0] for a in (0, 90, 180, 270)] == [3, 1, 1, 3]
+    # pinwheel: each wedge overlaps the next 30 degrees, lying under it; wedge 0 is repainted so it lies over the last
+    assert [w._slot_at(ang(a))[0] for a in (15, 105, 195, 285)] == [0, 1, 2, 3]
     assert w._slot_at(w._slot_rect(Rect(2, 2, 0, 0)).topLeft()) is None   # the page corner is in no wedge
 
 

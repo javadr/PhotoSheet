@@ -202,7 +202,8 @@ class Poster(Layout):
 class Carousel(Layout):
     """Circular montage: one wedge per image, one page. Overlap/angles in degrees, sizes in points.
 
-    Even wedges are drawn first, odd wedges on top, so the overlap shows the odd image.
+    Pinwheel: each wedge slides under the next one and lies over the previous one. Painted in order, the
+    last seam would invert, so wedge 0 is painted once more, trimmed to its own sector (see layers()).
     """
     segments: int = 4
     overlap: float = 30.0
@@ -225,8 +226,20 @@ class Carousel(Layout):
         out = []
         for i, (a0, a1) in enumerate(segment_angles(self.segments, self.angle_offset)):
             if i < len(self.images):
-                poly = wedge_polygon(cx, cy, r, a0 - self.overlap / 2, a1 + self.overlap / 2, self.inner_radius)
+                poly = wedge_polygon(cx, cy, r, a0, a1 + self.overlap, self.inner_radius)
                 out.append((self.images[i], poly, bbox(poly)))
+        return out
+
+    def layers(self) -> list[tuple[int, list[tuple[float, float]]]]:
+        """(wedge index, polygon to paint) bottom to top."""
+        from .geometry import segment_angles, wedge_polygon
+        w = self.wedges()
+        out = [(i, poly) for i, (_, poly, _) in enumerate(w)]
+        if len(w) > 2:   # shortcut: with 2 wedges both seams are the same pair, so one must stay inverted
+            p = self.page
+            a0, a1 = segment_angles(self.segments, self.angle_offset)[0]
+            out.append((0, wedge_polygon(p.left + p.imageable_w / 2, p.top + p.imageable_h / 2,
+                                         min(p.imageable_w, p.imageable_h) / 2, a0, a1, self.inner_radius)))
         return out
 
     def slots(self, page: int):

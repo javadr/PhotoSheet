@@ -384,10 +384,10 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         wedges = layout.wedges()
         get = _prefetch([w[0] for w in wedges], printer_profile, fast, progress, cancel)
         check()
-        for k, i in enumerate([*range(0, len(wedges), 2), *range(1, len(wedges), 2)]):  # evens, then odds on top
+        for k, (i, poly) in enumerate(layout.layers()):
             check()
             placed(k, len(wedges))
-            item, poly, box = wedges[i]
+            item, _, box = wedges[i]
             tmp = Image.new("RGB", canvas.size, background)
             _place(tmp, replace(item, crop=True, rotation=0, mask=None), get(item), box, s, fast)
             mask = Image.new("L", canvas.size, 0)

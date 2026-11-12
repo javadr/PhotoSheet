@@ -670,7 +670,7 @@ def test_carousel_feather_fades_the_overlap_and_round_trips(red, tmp_path):
     c = Carousel(page=PageExtent(200, 200), segments=2, overlap=60, feather=20)
     c.add(ImageItem(red))
     c.add(ImageItem(str(blue)))
-    px = render_page(c, 0, dpi=72).getpixel((100, 100 - 40))   # on the seam between the two wedges
+    px = render_page(c, 0, dpi=72).getpixel((100, 100 + 40))   # on the seam where wedge 1 lies over wedge 0
     assert 0 < px[0] < 255 and 0 < px[2] < 255                 # a mix of red and blue
     assert from_dict(to_dict(c)).feather == 20
 
