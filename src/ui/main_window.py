@@ -16,7 +16,7 @@ from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel, QAction, QCo
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QStyledItemDelegate, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
-    QHBoxLayout, QLabel, QListWidget, QMainWindow, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
+    QHBoxLayout, QLabel, QListWidget, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
     QFrame, QGraphicsDropShadowEffect, QSlider, QStyle, QStyleOptionToolButton, QStylePainter, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -638,6 +638,10 @@ class MainWindow(QMainWindow):
         # Delete only fires while the list has focus, so it can't eat a keystroke in a spin box.
         self.remove_act.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         self.list.addAction(self.remove_act)
+        self.preview.addAction(self.remove_act)   # Delete also works after clicking a photo in the preview
+        self.preview.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.preview.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.preview.customContextMenuRequested.connect(self._preview_menu)
         act(e, "Center Photo in Frame", self._center_photo)
         act(e, "Sort Photos by Date", self._sort_by_date)
         e.addSeparator()
@@ -1390,6 +1394,14 @@ class MainWindow(QMainWindow):
             self.list.setCurrentRow(min(r, self.list.count() - 1))
             self.refresh()
 
+    def _preview_menu(self, pos):
+        hit = self._slot_at(QPointF(pos))
+        if hit:
+            self.list.setCurrentRow(hit[0])
+            menu = QMenu(self)
+            menu.addAction(self.remove_act)
+            menu.exec(self.preview.mapToGlobal(pos))
+
     def remove_all(self):
         if self.layout_.images:
             self._edit("Remove All Images", self.layout_.images.clear)
@@ -1904,6 +1916,10 @@ class MainWindow(QMainWindow):
 
     def eventFilter(self, obj, ev):
         if obj is self.preview:
+            if ev.type() == QEvent.Type.KeyPress and ev.key() in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_Right, Qt.Key.Key_Down):
+                step = -1 if ev.key() in (Qt.Key.Key_Left, Qt.Key.Key_Up) else 1
+                self.list.setCurrentRow(min(max(self.list.currentRow() + step, 0), self.list.count() - 1))
+                return True
             if ev.type() == QEvent.Type.Resize:   # the scroll area resizes the page after a zoom: re-place the outlines on it
                 self._refresh_overlay()
             return self._page_mouse(ev) if isinstance(ev, QMouseEvent) else False
