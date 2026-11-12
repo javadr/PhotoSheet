@@ -784,6 +784,8 @@ class MainWindow(QMainWindow):
         self.sc_n = self._spin(1, 30, 6)
         self.sc_size = SliderSpin(15, 90, 45, " %")
         self.sc_tilt = SliderSpin(0, 45, 12, "°")
+        self.sc_spread = SliderSpin(0, 100, 100, " %")
+        self.sc_even = QCheckBox("Fill the page evenly")
         self.sc_border = self._spin(0, 40, 8)
         self.sc_seed = self._spin(0, 9999, 1)
         self.sc_seed.setToolTip("The same number always gives the same pile.")
@@ -842,7 +844,7 @@ class MainWindow(QMainWindow):
             ("calendar", "Week starts on", self.cal_week), ("calendar", "Photo size (%)", self.cal_share),
             ("shapes", "Shape", self.shape_kind), ("ring", "Photos in the ring", self.ring_n), ("ring", "", self.ring_center),
             ("scatter", "Photos per page", self.sc_n), ("scatter", "Photo size (%)", self.sc_size),
-            ("scatter", "Tilt (°)", self.sc_tilt), ("scatter", "Border (pt)", self.sc_border),
+            ("scatter", "Tilt (°)", self.sc_tilt), ("scatter", "Spread (%)", self.sc_spread), ("scatter", "", self.sc_even), ("scatter", "Border (pt)", self.sc_border),
             ("scatter", "Random seed", self.sc_seed), ("scatter", "", self.shuffle_btn),
             ("slant", "Panels", self.slant_panels), ("slant", "Lean", self.slant),
             ("fan", "Cards per page", self.fan_n), ("fan", "Spread", self.fan_spread), ("fan", "Border", self.fan_border),
@@ -1030,7 +1032,7 @@ class MainWindow(QMainWindow):
         k = KEYS[self.kind.currentText()]
         for key, widgets in self.rowsof.items():
             for w in widgets:
-                visible = (key == "all" or k in key.split(",")) and not (w is self.crop and k in ("badges", "slant", "carousel"))   # these always fill their shape
+                visible = (key == "all" or k in key.split(",")) and not (w is self.crop and k in ("badges", "slant", "carousel", "scatter", "fan"))   # these always fill their shape, or (scatter, fan) draw each photo at its own shape or a fixed card
                 if w is self.per_sheet:   # a readout with nothing to say takes no room (no label with a blank value)
                     visible = visible and bool(self.per_sheet.text())
                 w.parentWidget().layout().setRowVisible(w, visible)
@@ -1151,7 +1153,7 @@ class MainWindow(QMainWindow):
                       marks=self.marks.isChecked())
         elif cls is Scatter:
             kw = dict(photos=self.sc_n.value(), size=self.sc_size.value() / 100, tilt=self.sc_tilt.value(),
-                      border=self.sc_border.value(), seed=self.sc_seed.value())
+                      border=self.sc_border.value(), seed=self.sc_seed.value(), spread=self.sc_spread.value() / 100, even=self.sc_even.isChecked())
         elif cls is Slant:
             kw = dict(panels=self.slant_panels.value(), slant=self.slant.value(), gutter=self.gutter.value())
         elif cls is Fan:
@@ -1297,6 +1299,8 @@ class MainWindow(QMainWindow):
             self.sc_n.setValue(lay.photos)
             self.sc_size.setValue(round(lay.size * 100))
             self.sc_tilt.setValue(round(lay.tilt))
+            self.sc_spread.setValue(round(lay.spread * 100))
+            self.sc_even.setChecked(lay.even)
             self.sc_border.setValue(round(lay.border))
             self.sc_seed.setValue(lay.seed)
         if isinstance(lay, Spiral):

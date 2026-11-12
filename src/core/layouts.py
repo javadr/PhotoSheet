@@ -1420,10 +1420,12 @@ class Scatter(Layout):
     tilt: float = 12.0     # largest tilt either way, in degrees
     border: float = 8.0
     seed: int = 1
+    even: bool = False     # one photo per area of the page (a jittered grid), so the pile fills the whole page instead of clumping
+    spread: float = 1.0    # how much of the page the photos roam over: 0 piles them in the middle, 1 uses all of it
 
     def __post_init__(self):
-        if self.photos < 1 or not 0.15 <= self.size <= 0.9 or not 0 <= self.tilt <= 45 or self.border < 0:
-            raise ValueError("photos >= 1, size between 0.15 and 0.9, tilt between 0 and 45, border >= 0")
+        if self.photos < 1 or not 0.15 <= self.size <= 0.9 or not 0 <= self.tilt <= 45 or self.border < 0 or not 0 <= self.spread <= 1:
+            raise ValueError("photos >= 1, size between 0.15 and 0.9, tilt between 0 and 45, border >= 0, spread between 0 and 1")
 
     @property
     def per_page(self) -> int:
@@ -1439,8 +1441,19 @@ class Scatter(Layout):
         iw, ih = p.imageable_w, p.imageable_h
         rng = random.Random(self.seed * 1009 + page)
         start, out = page * self.photos, []
-        for item in self.images[start:start + self.photos]:
+        chunk = self.images[start:start + self.photos]
+        cells = []
+        if self.even and chunk:
+            cols = max(1, min(len(chunk), round(math.sqrt(len(chunk) * iw / ih))))
+            rows = ceil_div(len(chunk), cols)
+            cells = [(c, r) for r in range(rows) for c in range(cols)]
+            random.Random(self.seed * 1009 + page + 7).shuffle(cells)
+            cols_rows = (cols, rows)
+        for k, item in enumerate(chunk):
             ang, rx, ry = rng.uniform(-self.tilt, self.tilt), rng.random(), rng.random()   # the same 3 draws for every photo
+            if cells:   # the photo's own random draw only moves it inside its cell
+                rx, ry = (cells[k][0] + rx) / cols_rows[0], (cells[k][1] + ry) / cols_rows[1]
+            rx, ry = .5 + (rx - .5) * self.spread, .5 + (ry - .5) * self.spread          # pull towards the centre
             a, longest = aspect(item), self.size * min(iw, ih)
             pw, ph = (longest, longest / a) if a >= 1 else (longest * a, longest)
             cw, ch = pw + 2 * b, ph + 3 * b                     # a thicker bottom edge, like an instant print

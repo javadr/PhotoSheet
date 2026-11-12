@@ -692,9 +692,25 @@ def test_scatter_is_repeatable_stays_on_the_page_and_the_seed_changes_the_pile(t
     flat = Scatter(page=pg, photos=3, tilt=0)
     flat.add(items[0])
     assert flat.pile(0)[0][3] == 0
-    for bad in (dict(photos=0), dict(size=0.05), dict(size=0.95), dict(tilt=-1), dict(tilt=60), dict(border=-1)):
+    for bad in (dict(photos=0), dict(size=0.05), dict(size=0.95), dict(tilt=-1), dict(tilt=60), dict(border=-1), dict(spread=-.1), dict(spread=1.1)):
         with pytest.raises(ValueError):
             Scatter(**bad)
+    centres = lambda lay: [(c.x + c.w / 2, c.y + c.h / 2) for _, _, c, _ in lay.pile(0)]
+    spans = {}
+    for sp in (1.0, 0.5, 0.0):
+        lay = Scatter(page=pg, photos=3, spread=sp)
+        for it in items:
+            lay.add(it)
+        xs, ys = zip(*centres(lay))
+        spans[sp] = (max(xs) - min(xs)) + (max(ys) - min(ys))
+        for _, _, card, _ in lay.pile(0):                                          # still on the page at every spread
+            assert card.x >= 20 - 1e-6 and card.x + card.w <= 575 + 1e-6
+    assert spans[1.0] > spans[0.5] > spans[0.0] and spans[0.0] < 1e-6             # 0 stacks them all in the middle
+    big = Scatter(page=pg, photos=12, size=0.25, even=True, tilt=0)                # fills the page: every quarter holds photos
+    for i in range(12):
+        big.add(ImageItem(f"{i}.png"))
+    cs = [((c.x + c.w / 2 - 20) / 555, (c.y + c.h / 2 - 20) / 802) for _, _, c, _ in big.pile(0)]
+    assert len({(int(x * 2), int(y * 2)) for x, y in cs}) == 4
 
 
 def aspect(item):

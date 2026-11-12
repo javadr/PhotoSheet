@@ -71,7 +71,7 @@ def build(args) -> NUp | Single | Poster:
         lay = Ring(page=page, photos=args.ring_photos, center=not args.no_center, gutter=args.gutter, marks=args.marks)
     elif args.layout == "scatter":
         lay = Scatter(page=page, photos=args.scatter_photos, size=args.scatter_size / 100, tilt=args.tilt,
-                      border=args.border, seed=args.seed)
+                      border=args.border, seed=args.seed, spread=args.scatter_spread / 100, even=args.even)
     elif args.layout == "slant":
         lay = Slant(page=page, panels=max(2, args.panels), slant=args.slant, gutter=args.gutter)
     elif args.layout == "fan":
@@ -169,6 +169,8 @@ def main(argv=None) -> int:
     ap.add_argument("--scatter-photos", type=int, default=6, help="scatter: photos per page")
     ap.add_argument("--scatter-size", type=float, default=45, help="scatter: photo size, percent of the page's shorter side")
     ap.add_argument("--tilt", type=float, default=12, help="scatter: largest tilt either way, degrees")
+    ap.add_argument("--scatter-spread", type=float, default=100, help="scatter: how much of the page the photos roam over, percent (0 = piled in the middle)")
+    ap.add_argument("--even", action="store_true", help="scatter: spread the photos evenly over the whole page")
     ap.add_argument("--seed", type=int, default=1, help="scatter: random seed (same seed = same pile)")
     ap.add_argument("--slant", type=float, default=12, help="slant: lean in degrees, -40 to 40")
     ap.add_argument("--fan-photos", type=int, default=5, help="fan: cards per page")
