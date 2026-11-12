@@ -80,7 +80,7 @@ class Layout:
 
     # Rendering hooks. shape "ellipse" crops every photo to a circle; the colours style captions and cards.
     shape = "rect"
-    auto_rotate = True   # False: photos fitted whole stay upright instead of turning to match their slot
+    auto_rotate = False  # False: photos fitted whole stay upright instead of turning to match their slot
     caption_color = (70, 70, 70)
 
     def shapes(self, page: int) -> list[tuple[str, Rect, tuple]]:

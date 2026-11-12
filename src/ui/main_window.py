@@ -1441,22 +1441,43 @@ class MainWindow(QMainWindow):
             self.list.setCurrentItem(item)
         r, n = self.list.row(item), self.list.count()
         menu = QMenu(self)
-        menu.addAction(self.remove_act)
+        self._adjust_actions(menu)
+        menu.addSeparator()
         menu.addActions(self.move_acts)
+        menu.addSeparator()
+        menu.addAction(self.remove_act)
         self.move_acts[0].setEnabled(r > 0)
         self.move_acts[1].setEnabled(r < n - 1)
         menu.exec(self.list.viewport().mapToGlobal(pos))
+
+    def _adjust_actions(self, menu):
+        """Rotate, flip and tone entries that drive the Image panel's controls for the selected photo."""
+        rot = menu.addMenu("Rotate")
+        for text, d in (("Left 90°", -90), ("Right 90°", 90)):
+            rot.addAction(text, lambda d=d: self.angle.setValue((self.angle.value() + d + 180) % 360 - 180))
+        flip = menu.addMenu("Flip")
+        for text, box in (("Horizontal", self.fliph), ("Vertical", self.flipv)):
+            a = flip.addAction(text, box.toggle)
+            a.setCheckable(True)
+            a.setChecked(box.isChecked())
+        for text, box in (("Desaturate", self.gray), ("Auto Contrast", self.auto)):
+            a = menu.addAction(text, box.toggle)
+            a.setCheckable(True)
+            a.setChecked(box.isChecked())
 
     def _preview_menu(self, pos):
         hit = self._slot_at(QPointF(pos))
         if hit:
             self.list.setCurrentRow(hit[0])
             menu = QMenu(self)
-            menu.addAction(self.remove_act)
+            self._adjust_actions(menu)
+            menu.addSeparator()
             for title, mod, px in (("Shift Photo", "Shift", 2), ("Shift Photo (Large Step)", "Ctrl", 10)):
                 sub = menu.addMenu(title)
                 for name, dx, dy in (("Left", -1, 0), ("Right", 1, 0), ("Up", 0, -1), ("Down", 0, 1)):
                     sub.addAction(f"{name}\t{mod}+{name}", lambda dx=dx, dy=dy, px=px: self._nudge(dx, dy, px))
+            menu.addSeparator()
+            menu.addAction(self.remove_act)
             menu.exec(self.preview.mapToGlobal(pos))
 
     def remove_all(self):
