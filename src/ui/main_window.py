@@ -15,9 +15,9 @@ from PySide6.QtCore import QSize, qVersion, QEvent, QObject, QPointF, QRectF, QR
 from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPainterPath, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QStyledItemDelegate, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
+    QAbstractItemView, QApplication, QStyledItemDelegate, QStyleOptionViewItem, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
     QHBoxLayout, QLabel, QListWidget, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
-    QFrame, QGraphicsDropShadowEffect, QSlider, QStyle, QStyleOptionToolButton, QStylePainter, QToolButton, QVBoxLayout, QWidget,
+    QFrame, QGraphicsDropShadowEffect, QSlider, QStyle, QStyleOptionToolButton, QStylePainter, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
 
 from .. import __version__
@@ -138,6 +138,16 @@ class _NumberedDelegate(QStyledItemDelegate):
         super().initStyleOption(option, index)
         if index.model().rowCount() > 1:   # a lone photo needs no number
             option.text = f"{index.row() + 1}.  {option.text}"
+
+    def helpEvent(self, event, view, option, index):   # tooltip only when the name doesn't fit
+        if event.type() == QEvent.Type.ToolTip and index.isValid():
+            self.initStyleOption(opt := QStyleOptionViewItem(option), index)
+            if option.fontMetrics.horizontalAdvance(opt.text) + 12 > option.rect.width():
+                QToolTip.showText(event.globalPos(), index.data(), view)
+            else:
+                QToolTip.hideText()
+            return True
+        return super().helpEvent(event, view, option, index)
 
 
 class _ImageList(QListWidget):
@@ -638,6 +648,12 @@ class MainWindow(QMainWindow):
         # Delete only fires while the list has focus, so it can't eat a keystroke in a spin box.
         self.remove_act.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         self.list.addAction(self.remove_act)
+        self.move_acts = []
+        for text, d, key in (("Move Up", -1, "Ctrl+Up"), ("Move Down", 1, "Ctrl+Down")):
+            a = QAction(text, self.list, shortcut=QKeySequence(key), shortcutContext=Qt.ShortcutContext.WidgetShortcut)
+            a.triggered.connect(lambda _=False, d=d: self._move_selected(d))
+            self.list.addAction(a)
+            self.move_acts.append(a)
         self.preview.addAction(self.remove_act)   # Delete also works after clicking a photo in the preview
         self.preview.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.preview.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -898,6 +914,8 @@ class MainWindow(QMainWindow):
         self.list = _ImageList()
         self.list.setItemDelegate(_NumberedDelegate(self.list))
         self.list.files_dropped.connect(self._add_files)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._list_menu)
         self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         # Ctrl+A, Shift+Up/Down and Ctrl+click are Qt's stock extended-selection keys
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -1394,12 +1412,42 @@ class MainWindow(QMainWindow):
             self.list.setCurrentRow(min(r, self.list.count() - 1))
             self.refresh()
 
+    def _move_selected(self, d):
+        r, n = self.list.currentRow(), self.list.count()
+        if 0 <= r + d < n:
+            def swap():
+                im = self.layout_.images
+                im[r], im[r + d] = im[r + d], im[r]
+            self._edit("Move Image", swap)
+            self._sync_segments()
+            self._fill_list()
+            self.list.setCurrentRow(r + d)
+            self.refresh()
+
+    def _list_menu(self, pos):
+        item = self.list.itemAt(pos)
+        if not item:
+            return
+        if not item.isSelected():
+            self.list.setCurrentItem(item)
+        r, n = self.list.row(item), self.list.count()
+        menu = QMenu(self)
+        menu.addAction(self.remove_act)
+        menu.addActions(self.move_acts)
+        self.move_acts[0].setEnabled(r > 0)
+        self.move_acts[1].setEnabled(r < n - 1)
+        menu.exec(self.list.viewport().mapToGlobal(pos))
+
     def _preview_menu(self, pos):
         hit = self._slot_at(QPointF(pos))
         if hit:
             self.list.setCurrentRow(hit[0])
             menu = QMenu(self)
             menu.addAction(self.remove_act)
+            for title, mod, px in (("Shift Photo", "Shift", 2), ("Shift Photo (Large Step)", "Ctrl", 10)):
+                sub = menu.addMenu(title)
+                for name, dx, dy in (("Left", -1, 0), ("Right", 1, 0), ("Up", 0, -1), ("Down", 0, 1)):
+                    sub.addAction(f"{name}\t{mod}+{name}", lambda dx=dx, dy=dy, px=px: self._nudge(dx, dy, px))
             menu.exec(self.preview.mapToGlobal(pos))
 
     def remove_all(self):
@@ -1914,8 +1962,31 @@ class MainWindow(QMainWindow):
                 return True
         return False
 
+    def _nudge(self, dx, dy, px=2):
+        """Shift the selected photo by a couple of screen pixels (the mouse drag, but finer)."""
+        row, slots = self.list.currentRow(), dict(self._slots_now())
+        if row not in slots:
+            return
+        z = self.zoom if self.zoom is not None else self._fit_zoom()
+        if isinstance(self.layout_, Collage):
+            it, k = self.layout_.images[row], self.SCREEN_DPI * z / 72
+            x, y, w, h = it.box
+            self._edit("Move Photo", lambda: setattr(it, "box", tuple(self.layout_.clamp((x + dx * px / k, y + dy * px / k, w, h), it.angle))))
+            self.refresh()
+            self._refresh_overlay()
+        else:
+            self._pan = self._start_pan((row, slots[row]), QPointF(0, 0))
+            if not self._pan:
+                return
+            self._pan_to(QPointF(dx * px, dy * px))
+            self._end_pan()
+
     def eventFilter(self, obj, ev):
         if obj is self.preview:
+            arrows = {Qt.Key.Key_Left: (-1, 0), Qt.Key.Key_Right: (1, 0), Qt.Key.Key_Up: (0, -1), Qt.Key.Key_Down: (0, 1)}
+            if ev.type() == QEvent.Type.KeyPress and ev.key() in arrows and ev.modifiers() & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier):
+                self._nudge(*arrows[ev.key()], px=10 if ev.modifiers() & Qt.KeyboardModifier.ControlModifier else 2)
+                return True
             if ev.type() == QEvent.Type.KeyPress and ev.key() in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_Right, Qt.Key.Key_Down):
                 step = -1 if ev.key() in (Qt.Key.Key_Left, Qt.Key.Key_Up) else 1
                 self.list.setCurrentRow(min(max(self.list.currentRow() + step, 0), self.list.count() - 1))

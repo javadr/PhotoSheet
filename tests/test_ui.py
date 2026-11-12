@@ -1569,3 +1569,31 @@ def test_selection_outline_follows_a_zoom_at_once_and_survives_the_rerender(app,
     while w._fit_timer.isActive() or (w._base_zoom != w.zoom and time.time() < t):
         app.processEvents()
     assert w.preview.overlay and w.preview.overlay[0][0] == w._shape(1, slot())   # still there after the sharp render
+
+
+def test_shift_arrow_nudges_a_cropped_photo_and_undoes(app, tmp_path):
+    w = _ready_window(app, tmp_path)
+    w.crop.setChecked(True)
+    for i in w.layout_.images:
+        i.rotation = 0
+    w.list.setCurrentRow(0)
+    item = w.layout_.images[0]
+    w._nudge(-1, 0)                                           # what Shift+Left does
+    assert item.hpan > 0.5 and item.vpan == 0.5
+    assert w.undo_act.text() == "Undo Reposition Photo"
+    w.undo_stack.undo()
+    assert w.layout_.images[0].hpan == 0.5
+
+
+def test_ctrl_arrow_nudges_further_than_shift_arrow(app, tmp_path):
+    w = _ready_window(app, tmp_path)
+    w.crop.setChecked(True)
+    for i in w.layout_.images:
+        i.rotation = 0
+    w.list.setCurrentRow(0)
+    item = w.layout_.images[0]
+    w._nudge(-1, 0)
+    small = item.hpan - 0.5
+    item.hpan = 0.5
+    w._nudge(-1, 0, px=10)
+    assert abs((item.hpan - 0.5) - 5 * small) < 1e-6
