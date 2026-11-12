@@ -27,7 +27,7 @@ from ..core.layouts import (BADGE_SIZES, BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES
                             Fan, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic,
                             NUp, Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs,
                             Strip, Timeline, Triptych, aspect, date_sort_key, snap_delta)
-from ..core.render import Cancelled, _unit_poly, render_page, save_pages, uncached
+from ..core.render import Cancelled, _unit_poly, render_page, render_poster_overview, save_pages, with_locator, uncached
 
 PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
          "4 × 6 in": (288, 432), "5 × 7 in": (360, 504), "8 × 10 in": (576, 720)}   # portrait points; Orientation turns them
@@ -214,17 +214,23 @@ class _Signals(QObject):
 
 
 class _Job(QRunnable):
-    def __init__(self, gen, layout, page, dpi, sig, current):
+    def __init__(self, gen, layout, page, dpi, sig, current, overview=False):
         super().__init__()
         self.gen, self.layout, self.page, self.dpi, self.sig = gen, layout, page, dpi, sig
-        self.current = current
+        self.current, self.overview = current, overview   # overview: True = all pages, False = one page with a poster map
 
     def run(self):
         if not self.current():
             return  # superseded while queued: don't burn CPU on it
         try:
-            res = to_qimage(render_page(self.layout, self.page, self.dpi, fast=True,
-                                        progress=lambda d, t: self.sig.progress.emit(self.gen, d, t)))
+            if self.overview:
+                res = to_qimage(render_poster_overview(self.layout, self.page, self.dpi, fast=True))
+            else:
+                im = render_page(self.layout, self.page, self.dpi, fast=True,
+                                 progress=lambda d, t: self.sig.progress.emit(self.gen, d, t))
+                if isinstance(self.layout, Poster) and self.layout.images:
+                    im = with_locator(self.layout, self.page, im)
+                res = to_qimage(im)
         except Exception as e:  # shown in the status bar; never crash the worker
             res = e
         try:
@@ -733,6 +739,8 @@ class MainWindow(QMainWindow):
         self.feather = SliderSpin(0, 100, 0, " pt")
         self.angle, self.inner = self._spin(-360, 360, 0), self._spin(0, 400, 0)
         self.poster_w, self.poster_h = self._spin(1, 400, 16), self._spin(1, 400, 12)
+        self.overview = QCheckBox("Show all pages in preview")
+        self.overview.setChecked(True)
         self.size_preset = QComboBox()
         self.size_preset.addItems(SIZE_PRESETS)
         self.cell_w, self.cell_h = self._dspin(10, 400, 35), self._dspin(10, 400, 45)
@@ -846,6 +854,7 @@ class MainWindow(QMainWindow):
             ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap), ("nup,single,fixed,passport,carousel,mosaic,strip,polaroid,package,collage,framed,badges,feature,filmstrip,bento,spiral,honeycomb,calendar,masonry,shapes,ring,scatter,slant,fan,timeline,brick,checker,stairs,pyramid,diamond", "Feather (pt)", self.feather),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
+            ("poster", "", self.overview),
             ("fixed,passport", "Print size", self.size_preset), ("fixed,passport", "Width (mm)", self.cell_w),
             ("fixed,passport", "Height (mm)", self.cell_h), ("passport", "Copies per photo", self.copies),
             ("fixed,passport,package,badges,honeycomb,shapes,ring,slant", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
@@ -1510,8 +1519,14 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     # ---- preview ----
+    def _tiles(self) -> int:
+        """Pages per navigation step: a whole poster's tiles in the overview (one step per image), else 1."""
+        return self.layout_.htiles * self.layout_.vtiles if self._overview() else 1
+
     def goto(self, n):
-        self.page_no = max(0, min(n, self.layout_.pages - 1))
+        t = self._tiles()
+        last = self.layout_.pages // t - 1   # in the overview: one entry per image
+        self.page_no = max(0, min(self.page_no // t + (n - self.page_no), last)) * t
         self.refresh()
 
     def _apply_desk(self):
@@ -1526,9 +1541,10 @@ class MainWindow(QMainWindow):
         super().changeEvent(ev)
 
     def _fit_zoom(self) -> float:
-        vp, p = self.scroll.viewport().size(), self.layout_.page
+        vp = self.scroll.viewport().size()
+        w, h = (self.layout_.poster_w, self.layout_.poster_h) if self._overview() else (self.layout_.page.width, self.layout_.page.height)
         pad = 2 * self.FIT_PAD
-        avail = min((vp.width() - pad) / p.width, (vp.height() - pad) / p.height)  # px per point
+        avail = min((vp.width() - pad) / w, (vp.height() - pad) / h)  # px per point
         return max(0.1, avail * 72 / self.SCREEN_DPI)
 
     def set_zoom(self, z):
@@ -1749,9 +1765,13 @@ class MainWindow(QMainWindow):
         k = self._rot_handle(item, slot)[1]
         return abs(pos.x() - k.x()) <= HANDLE + 4 and abs(pos.y() - k.y()) <= HANDLE + 4
 
+    def _overview(self) -> bool:
+        return isinstance(self.layout_, Poster) and self.overview.isChecked()
+
     def _refresh_overlay(self):
         """Outline every selected photo; the current Collage photo also gets resize handles."""
-        if self._cl or self._stale:
+        if self._cl or self._stale or self._overview():
+            self.preview.overlay = [] if self._overview() else self.preview.overlay
             return
         ov = []
         slots = dict(self._slots_now())
@@ -2061,9 +2081,12 @@ class MainWindow(QMainWindow):
     def refresh(self, keep_overlay=False):
         """Re-render the page. keep_overlay: only the zoom changed, so the outlines on the stretched page stay right."""
         self.page_no = max(0, min(self.page_no, self.layout_.pages - 1))
-        self.page_label.setText(f" {self.page_no + 1} / {self.layout_.pages} ")
+        t = self._tiles()
+        self.page_no -= self.page_no % t   # the overview sits on the first tile of an image
+        cur, total = self.page_no // t, self.layout_.pages // t
+        self.page_label.setText(f" {cur + 1} / {total} ")
         for btn, step in self._nav_btns:   # dim the controls that can't go further
-            btn.setEnabled(self.page_no > 0 if step < 0 else self.page_no < self.layout_.pages - 1)
+            btn.setEnabled(cur > 0 if step < 0 else cur < total - 1)
         if isinstance(self.layout_, Collage):
             self.layout_.slots(0)   # place new photos here, on the UI thread, before the render thread reads them
         self._gen += 1
@@ -2079,8 +2102,9 @@ class MainWindow(QMainWindow):
         except Exception:
             self._cold = 0
         self.busy_timer.start()
+        ov = self._overview()
         self.pool.start(_Job(gen, self.layout_, self.page_no, self.SCREEN_DPI * z * dpr, self.sig,
-                             lambda: gen == self._gen))
+                             lambda: gen == self._gen, ov))
 
     def _on_rendered(self, gen, res):
         if gen != self._gen:

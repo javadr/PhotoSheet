@@ -318,6 +318,41 @@ def save_pages(pages, path: str, dpi: int, after=None) -> None:
             after(i)
 
 
+def render_poster_overview(layout: Poster, page: int, dpi: float = 150, background=(255, 255, 255),
+                           fast: bool = False, mark: bool = False, max_side: int | None = None) -> Image.Image:
+    """The whole poster with every page's tile outlined and numbered, in true position.
+    mark: outline `page` in red. max_side: shrink to a thumbnail (no numbers) for a locator."""
+    s = dpi / 72
+    idx, cur, _ = layout.tile_window(page)
+    n = layout.htiles * layout.vtiles
+    if not layout.images:
+        return Image.new("RGB", (round(layout.poster_w * s), round(layout.poster_h * s)), background)
+    im = _poster(layout, layout.images[idx], s, None, background, fast).copy()
+    k = max_side / max(im.size) if max_side else 1
+    lw = max(2, round(2 * s / k)) if max_side else max(2, round(2 * s))
+    d = ImageDraw.Draw(im, "RGBA")
+    font = ImageFont.load_default(size=max(10, round(14 * s)))
+    for t in sorted(range(n), key=lambda t: t == cur and mark):   # the red one last, so it stays on top
+        w = layout.tile_window(idx * n + t)[2]
+        box = (round(w.x * s), round(w.y * s), round((w.x + w.w) * s) - 1, round((w.y + w.h) * s) - 1)
+        d.rectangle(box, outline=(230, 0, 0, 255) if mark and t == cur else (255, 255, 255, 230), width=lw)
+        if not max_side:
+            d.text((box[0] + 6 * s, box[1] + 4 * s), str(idx * n + t + 1), font=font, fill=(255, 255, 255, 255),
+                   stroke_width=max(1, round(s)), stroke_fill=(0, 0, 0, 255))
+    return im.resize((max(1, round(im.width * k)), max(1, round(im.height * k))), Image.LANCZOS) if max_side else im
+
+
+def with_locator(layout: Poster, page: int, img: Image.Image) -> Image.Image:
+    """Preview only: a small poster map in the corner of `img` (one rendered page), this page's tile outlined in red."""
+    s = img.width / layout.page.width
+    pad = round(8 * s)
+    mini = render_poster_overview(layout, page, s * 72, mark=True, max_side=round(img.width * 0.28))
+    mini = ImageOps.expand(mini, border=1, fill=(0, 0, 0))
+    img = img.copy()
+    img.paste(mini, (img.width - mini.width - pad, img.height - mini.height - pad))
+    return img
+
+
 def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str | None = None,
                 background=(255, 255, 255), fast: bool = False, progress=None, cancel=None, placing=None) -> Image.Image:
     s = dpi / 72

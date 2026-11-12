@@ -5,7 +5,7 @@ from photosheet import cli
 from photosheet.core.effects import apply_effects
 from photosheet.core.geometry import PageExtent
 from photosheet.core.layouts import ImageItem, NUp, Poster
-from photosheet.core.render import render_all, render_page
+from photosheet.core.render import render_all, render_page, render_poster_overview, with_locator
 
 
 @pytest.fixture
@@ -37,6 +37,17 @@ def test_poster_tiles_cover_whole_image(red):
     pages = render_all(p, dpi=72)
     assert len(pages) == 3
     assert pages[2].getpixel((10, 50)) == (255, 0, 0)
+
+
+def test_poster_overview_is_whole_poster(red):
+    p = Poster(page=PageExtent(100, 100), poster_w=250, poster_h=100, hoverlap=10, voverlap=10)
+    p.add(ImageItem(red, crop=True, rotation=0))
+    im = render_poster_overview(p, 1, dpi=72)
+    assert im.size == (250, 100)
+    assert im.getpixel((90, 50))[1] > 200    # a pale outline, not the red one
+    assert render_poster_overview(p, 1, dpi=72, mark=True).getpixel((90, 50)) == (230, 0, 0)
+    page = render_page(p, 1, dpi=72)
+    assert with_locator(p, 1, page).size == page.size
 
 
 def test_effects_and_unknown_effect(red):
