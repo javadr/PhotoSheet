@@ -890,6 +890,8 @@ class MainWindow(QMainWindow):
         self.list.setItemDelegate(_NumberedDelegate(self.list))
         self.list.files_dropped.connect(self._add_files)
         self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        # Ctrl+A, Shift+Up/Down and Ctrl+click are Qt's stock extended-selection keys
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.list.model().rowsMoved.connect(self._reordered)
         self.list.currentRowChanged.connect(self._load_effects)
         self.list.currentRowChanged.connect(lambda *_: self._refresh_overlay())
@@ -1367,9 +1369,10 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def remove_selected(self):
-        r = self.list.currentRow()
-        if r >= 0:
-            self._edit("Remove Image", lambda: self.layout_.images.pop(r))
+        rows = sorted({self.list.row(i) for i in self.list.selectedItems()} or {self.list.currentRow()} - {-1}, reverse=True)
+        if rows:
+            r = rows[-1]
+            self._edit("Remove Image", lambda: [self.layout_.images.pop(i) for i in rows])
             self._sync_segments()
             self._fill_list()
             self.list.setCurrentRow(min(r, self.list.count() - 1))
