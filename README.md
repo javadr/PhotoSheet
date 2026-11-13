@@ -96,12 +96,13 @@ photosheet-cli photos/*.jpg -o calendar.png --layout calendar --year 2027 --crop
 - ICC colour management through Pillow's `ImageCms` (per-image or printer profile, rendering intent).
 - Per-image gamma, warm/cool, sharpen, desaturate, auto contrast, flips and free rotation in degrees (with 90° buttons).
 - Save and open your setups as JSON presets.
+- Remembers your page, layout, view and export choices between runs (File → Preferences…), in `settings.toml`: `~/.config/PhotoSheet/` on Linux, `~/Library/Preferences/PhotoSheet/` on macOS, `%LOCALAPPDATA%\PhotoSheet\` on Windows.
 - Export to PDF (multi-page) or PNG, or print through Qt.
 - Export starts rendering as soon as you click it, while you choose the file name, and runs in the background with a progress bar; cancel the dialog and it stops.
 
 ## Install
 
-Needs Python 3.10 or newer.
+Needs Python 3.11 or newer.
 
 ```sh
 pip install photosheet  # from PyPI (or:  make pins  to install the pinned version, plus a desktop launcher)

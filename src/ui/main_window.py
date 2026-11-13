@@ -11,16 +11,16 @@ import random
 
 from PIL import Image
 from PySide6 import __version__ as PYSIDE_VERSION
-from PySide6.QtCore import QSize, qVersion, QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QIcon, QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPainterPath, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
+from PySide6.QtCore import QRect, QSize, qVersion, QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QGuiApplication, QIcon, QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPainterPath, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QStyledItemDelegate, QStyleOptionViewItem, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
     QHBoxLayout, QLabel, QListWidget, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
-    QFrame, QGraphicsDropShadowEffect, QSlider, QStyle, QStyleOptionToolButton, QStylePainter, QToolButton, QToolTip, QVBoxLayout, QWidget,
+    QFrame, QGraphicsDropShadowEffect, QLineEdit, QSlider, QStyle, QStyleOptionToolButton, QStylePainter, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
 
-from .. import __version__
+from .. import __version__, settings
 from ..core import preset
 from ..core.geometry import PageExtent, Rect, crop_overflow
 from ..core.layouts import (BADGE_SIZES, BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Brick, Calendar, Carousel, Checker, Collage, Diamond, Pyramid,
@@ -82,7 +82,9 @@ def restore_text_size() -> None:
     """Apply the saved text size, never below the platform minimum."""
     app = QApplication.instance()
     f = app.font()
-    f.setPointSizeF(max(MIN_FONT_PT, float(QSettings("PhotoSheet", "PhotoSheet").value("fontPt", f.pointSizeF()))))
+    # The size used to live in QSettings: read it once there so an upgrade keeps it.
+    pt = settings.load()["view"]["font_pt"] or float(QSettings("PhotoSheet", "PhotoSheet").value("fontPt", f.pointSizeF()))
+    f.setPointSizeF(max(MIN_FONT_PT, min(MAX_FONT_PT, pt)))
     app.setFont(f)
 
 
@@ -92,11 +94,30 @@ def change_text_size(delta: float, persist: bool = True) -> None:
     f.setPointSizeF(max(MIN_FONT_PT, min(MAX_FONT_PT, f.pointSizeF() + delta)))
     app.setFont(f)
     if persist:
-        QSettings("PhotoSheet", "PhotoSheet").setValue("fontPt", f.pointSizeF())
+        prefs = settings.load()
+        prefs["view"]["font_pt"] = f.pointSizeF()
+        _save_quietly(prefs)
+
+
+def _save_quietly(prefs: dict) -> None:
+    try:
+        settings.save(prefs)
+    except OSError as e:   # losing a preference must never stop the app or block closing it
+        print(f"PhotoSheet: could not save settings: {e}", file=sys.stderr)
 
 
 PDF_PRESETS = {"print quality": (95, 300), "standard": (80, 200), "small file": (60, 150)}   # (JPEG quality, dpi)
 IMG_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
+
+
+def on_screen(r: QRect, screens: list[QRect], primary: QRect) -> QRect:
+    """Where to put a saved window so it is fully visible: on the monitor its centre was on, or the main monitor if
+    that one is gone (unplugged, or the monitors were rearranged); shrunk to fit, then pushed inside its edges."""
+    area = next((s for s in screens if s.contains(r.center())), primary)
+    w, h = min(r.width(), area.width()), min(r.height(), area.height())
+    x = max(area.left(), min(r.x(), area.right() + 1 - w))
+    y = max(area.top(), min(r.y(), area.bottom() + 1 - h))
+    return QRect(x, y, w, h)
 
 
 def dropped_images(mime) -> list[str]:
@@ -680,6 +701,9 @@ class MainWindow(QMainWindow):
         self.busy_timer = QTimer(self, singleShot=True, interval=250)   # quick renders never flash a notice
         self.busy_timer.timeout.connect(self._show_busy)
         self.statusBar().hide()   # only shown while there is an error to report, so it leaves no blank strip
+        self.prefs = settings.load()
+        self._apply_prefs(self.prefs)
+        self._restore_window(self.prefs["window"])
         self.refresh()
 
     # ---- construction ----
@@ -698,6 +722,8 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         act(m, "Export PDF/PNG…", self.export, "Ctrl+E")
         act(m, "Print…", self.print_, "Ctrl+P")
+        m.addSeparator()
+        act(m, "Preferences…", self.preferences, QKeySequence.StandardKey.Preferences).setMenuRole(QAction.MenuRole.PreferencesRole)
         m.addSeparator()
         act(m, "Quit", self.close, "Ctrl+Q")
         # Page navigation: a row centred directly under the page preview.
@@ -782,9 +808,11 @@ class MainWindow(QMainWindow):
             self.hruler.inches = self.vruler.inches = on
             self.unit_lbl.setText("in" if on else "mm")
             self._update_rulers()
-        act(v, "Rulers", rulers_on).setCheckable(True)
-        v.actions()[-1].setChecked(True)
-        act(v, "Rulers in Inches", rulers_in).setCheckable(True)
+        self.rulers_act = QAction("Rulers", self, checkable=True, checked=True)
+        self.inches_act = QAction("Rulers in Inches", self, checkable=True)
+        for a, fn in ((self.rulers_act, rulers_on), (self.inches_act, rulers_in)):
+            a.toggled.connect(fn)   # toggled, not triggered: restoring a setting with setChecked must apply it too
+            v.addAction(a)
         v.addSeparator()
         act(v, "Fit to Window", lambda: self.set_zoom(None), "Ctrl+0")
         act(v, "Actual Size", lambda: self.set_zoom(1.0), "Ctrl+1")
@@ -1133,6 +1161,146 @@ class MainWindow(QMainWindow):
                 sp.setValue(v)
                 sp.blockSignals(False)
         self._layout_changed()
+
+    # ---- preferences ----
+    def _collect_prefs(self) -> dict:
+        """The settings as they stand in the window now: what the next start comes back to."""
+        p = copy.deepcopy(self.prefs)
+        p["page"].update(size=self.page_size.currentData(), margin=self.margin.value(),
+                         orientation=self.orient.currentText() if self._orient_touched else "auto")
+        p["layout"].update(kind=self.kind.currentText(), caption=self.caption.currentText(),
+                           cut_marks=self.marks.isChecked(), crop_to_fill=self.crop.isChecked())
+        # font_pt: Larger/Smaller Text save it straight to the file, so the file has the only up-to-date value
+        p["view"].update(font_pt=settings.load()["view"]["font_pt"], rulers=self.rulers_act.isChecked(),
+                         ruler_units="in" if self.inches_act.isChecked() else "mm",
+                         show_all_pages=self.overview.isChecked())
+        if self.isMaximized():   # keep the last normal size and place, so un-maximizing next time goes back there
+            p["window"]["maximized"] = True
+        else:
+            p["window"].update(x=self.x(), y=self.y(), width=self.width(), height=self.height(), maximized=False)
+        return p
+
+    def _restore_window(self, win: dict) -> None:
+        if win["width"] <= 0:
+            self.resize(1200, 800)
+            return
+        r = on_screen(QRect(win["x"], win["y"], win["width"], win["height"]),
+                      [s.availableGeometry() for s in QGuiApplication.screens()],
+                      QGuiApplication.primaryScreen().availableGeometry())
+        self.resize(r.size())
+        self.move(r.topLeft())
+        if win["maximized"]:
+            self.setWindowState(Qt.WindowState.WindowMaximized)   # show() then opens it maximized
+
+    def _apply_prefs(self, p: dict) -> None:
+        """Set the controls from settings. A value the app doesn't offer (an old or hand-edited file) is skipped."""
+        pg, lay, view = p["page"], p["layout"], p["view"]
+        self.kind.setCurrentText(lay["kind"])   # first: switching layout resets margin and orientation to its own
+        if (i := self.page_size.findData(pg["size"])) >= 0:
+            self.page_size.setCurrentIndex(i)
+        if pg["orientation"] == "auto":
+            self._orient_touched = False
+        else:
+            self.orient.setCurrentText(pg["orientation"])
+            self._orient_touched = True
+        self.margin.setValue(pg["margin"])
+        self.caption.setCurrentText(lay["caption"])
+        self.marks.setChecked(lay["cut_marks"])
+        self.crop.setChecked(lay["crop_to_fill"])
+        self.overview.setChecked(view["show_all_pages"])
+        self.rulers_act.setChecked(view["rulers"])
+        self.inches_act.setChecked(view["ruler_units"] == "in")
+
+    def closeEvent(self, e):
+        _save_quietly(self._collect_prefs())
+        super().closeEvent(e)
+
+    def _suggested_path(self, dir_key: str, ext: str) -> str:
+        """Last folder used plus a name from the user's naming pattern."""
+        return settings.free_path(self.prefs["export"]["file_name"], self.prefs["paths"][dir_key], ext,
+                                  layout=self.kind.currentText(), page=self.page_size.currentData(),
+                                  photos=len(self.layout_.images))
+
+    def _remember_dir(self, key: str, file: str) -> None:
+        self.prefs["paths"][key] = os.path.dirname(file)
+
+    def preferences(self):
+        """Edit the startup defaults. OK applies them to the window too, since the window's state is what gets saved."""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+        dlg = QDialog(self, windowTitle="Preferences")
+        form = QFormLayout(dlg)
+        p = self._collect_prefs()
+
+        def combo(items, current, data=None):
+            c = QComboBox()
+            for i, text in enumerate(items):
+                c.addItem(text, data[i] if data else text)
+            c.setCurrentIndex(max(0, c.findData(current)))
+            return c
+
+        def check(text, on):
+            c = QCheckBox(text)
+            c.setChecked(on)
+            return c
+
+        w = {}
+
+        def fill(p):
+            w["kind"].setCurrentIndex(max(0, w["kind"].findData(p["layout"]["kind"])))
+            w["size"].setCurrentIndex(max(0, w["size"].findData(p["page"]["size"])))
+            w["orientation"].setCurrentIndex(max(0, w["orientation"].findData(p["page"]["orientation"])))
+            w["margin"].setValue(p["page"]["margin"])
+            w["caption"].setCurrentIndex(max(0, w["caption"].findData(p["layout"]["caption"])))
+            w["cut_marks"].setChecked(p["layout"]["cut_marks"])
+            w["crop_to_fill"].setChecked(p["layout"]["crop_to_fill"])
+            w["show_all_pages"].setChecked(p["view"]["show_all_pages"])
+            w["rulers"].setChecked(p["view"]["rulers"])
+            w["ruler_units"].setCurrentIndex(max(0, w["ruler_units"].findData(p["view"]["ruler_units"])))
+            w["pdf_quality"].setCurrentIndex(max(0, w["pdf_quality"].findData(p["export"]["pdf_quality"])))
+            w["file_name"].setText(p["export"]["file_name"])
+
+        w["kind"] = combo(list(KINDS), "")
+        w["size"] = combo([self.page_size.itemText(i) for i in range(self.page_size.count())], "", list(PAGES))
+        w["orientation"] = combo(["Automatic (layout's own)", "Portrait", "Landscape"], "", ["auto", "Portrait", "Landscape"])
+        w["margin"] = self._spin(self.margin.minimum(), self.margin.maximum(), 0)
+        w["margin"].setSuffix(" pt")
+        w["caption"] = combo([self.caption.itemText(i) for i in range(self.caption.count())], "")
+        w["cut_marks"], w["crop_to_fill"] = check(self.marks.text(), False), check(self.crop.text(), False)
+        w["show_all_pages"], w["rulers"] = check(self.overview.text(), False), check("Show rulers", False)
+        w["ruler_units"] = combo(["Millimetres", "Inches"], "", ["mm", "in"])
+        w["pdf_quality"] = combo([k.capitalize() for k in PDF_PRESETS], "", list(PDF_PRESETS))
+        w["file_name"] = QLineEdit(placeholderText=settings.DEFAULTS["export"]["file_name"])
+        w["file_name"].setToolTip("Name suggested when you export or save a preset. Fields: "
+                                  + ", ".join(f"{{{k}}} ({v})" for k, v in settings.NAME_FIELDS.items()))
+        example = QLabel()
+        example.setEnabled(False)   # secondary text colour
+        w["file_name"].textChanged.connect(lambda t: example.setText("e.g. " + settings.file_name(
+            t, self.kind.currentText(), self.page_size.currentData(), len(self.layout_.images)) + ".pdf"))
+        fill(p)
+        for label, key in (("Layout", "kind"), ("Page", "size"), ("Orientation", "orientation"), ("Margin", "margin"),
+                           ("Caption", "caption"), ("", "cut_marks"), ("", "crop_to_fill"), ("", "show_all_pages"),
+                           ("", "rulers"), ("Ruler units", "ruler_units"), ("PDF quality", "pdf_quality"),
+                           ("File name", "file_name")):
+            form.addRow(label, w[key])
+        form.addRow("", example)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+                                   | QDialogButtonBox.StandardButton.RestoreDefaults)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        buttons.button(QDialogButtonBox.StandardButton.RestoreDefaults).clicked.connect(lambda: fill(settings.DEFAULTS))
+        form.addRow(buttons)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        p["page"].update(size=w["size"].currentData(), orientation=w["orientation"].currentData(), margin=w["margin"].value())
+        p["layout"].update(kind=w["kind"].currentData(), caption=w["caption"].currentData(),
+                           cut_marks=w["cut_marks"].isChecked(), crop_to_fill=w["crop_to_fill"].isChecked())
+        p["view"].update(show_all_pages=w["show_all_pages"].isChecked(), rulers=w["rulers"].isChecked(),
+                         ruler_units=w["ruler_units"].currentData())
+        p["export"].update(pdf_quality=w["pdf_quality"].currentData(),
+                           file_name=w["file_name"].text().strip() or settings.DEFAULTS["export"]["file_name"])
+        self.prefs = p
+        self._apply_prefs(p)
+        _save_quietly(p)
 
     def _touch_orient(self, *_):
         if not self._orient_setting:
@@ -1523,8 +1691,9 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def add_images(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Add images", "", IMG_FILTER)
+        files, _ = QFileDialog.getOpenFileNames(self, "Add images", self.prefs["paths"]["images_dir"], IMG_FILTER)
         if files:
+            self._remember_dir("images_dir", files[0])
             self._add_files(files)
 
     def _add_files(self, files):
@@ -2276,8 +2445,9 @@ class MainWindow(QMainWindow):
 
     # ---- files ----
     def open_preset(self):
-        f, _ = QFileDialog.getOpenFileName(self, "Open preset", "", "Preset (*.json)")
+        f, _ = QFileDialog.getOpenFileName(self, "Open preset", self.prefs["paths"]["presets_dir"], "Preset (*.json)")
         if f:
+            self._remember_dir("presets_dir", f)
             try:
                 self.layout_ = preset.load(f)
             except Exception as e:
@@ -2287,8 +2457,9 @@ class MainWindow(QMainWindow):
             self.refresh()
 
     def save_preset(self):
-        f, _ = QFileDialog.getSaveFileName(self, "Save preset", "sheet.json", "Preset (*.json)")
+        f, _ = QFileDialog.getSaveFileName(self, "Save preset", self._suggested_path("presets_dir", ".json"), "Preset (*.json)")
         if f:
+            self._remember_dir("presets_dir", f)
             try:
                 preset.save(self.layout_, f)
             except OSError as e:
@@ -2302,11 +2473,15 @@ class MainWindow(QMainWindow):
         job = self._export = _ExportJob(copy.deepcopy(self.layout_), self.sig)   # snapshot: later edits don't leak in
         self._export_pm, self._export_stage = 0, ""
         self.pool.start(job)   # rendering runs while the file dialog is open
-        f, flt = QFileDialog.getSaveFileName(self, "Export", "sheet.pdf", "PDF, print quality (*.pdf);;PDF, standard (*.pdf);;PDF, small file (*.pdf);;PNG (*.png)")
+        filters = [f"PDF, {k} (*.pdf)" for k in PDF_PRESETS] + ["PNG (*.png)"]
+        f, flt = QFileDialog.getSaveFileName(self, "Export", self._suggested_path("export_dir", ".pdf"), ";;".join(filters),
+                                             f"PDF, {self.prefs['export']['pdf_quality']} (*.pdf)")
         if not f:
             job.cancel()
             self._export = None
             return
+        self._remember_dir("export_dir", f)
+        self.prefs["export"]["pdf_quality"] = next((k for k in PDF_PRESETS if k in flt), self.prefs["export"]["pdf_quality"])
         self._export_name = os.path.basename(f)
         job.choose(f, *next((v for k, v in PDF_PRESETS.items() if k in flt), (85, 300)))
         self._export_popup()

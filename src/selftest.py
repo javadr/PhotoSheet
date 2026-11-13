@@ -28,6 +28,8 @@ def run(report: str | None = None) -> int:
             lines.append(f"FAIL  {name}: {type(e).__name__}: {e}")
 
     tmp = Path(tempfile.mkdtemp(prefix="photosheet-selftest-"))
+    from . import settings
+    settings.path = lambda: tmp / "settings.toml"   # the test window must not read or overwrite the user's settings
     photos: list[str] = []
 
     def make_photos():

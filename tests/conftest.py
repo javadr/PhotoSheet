@@ -11,3 +11,12 @@ if importlib.util.find_spec("photosheet") is None:
     mod = importlib.util.module_from_spec(spec)
     sys.modules["photosheet"] = mod
     spec.loader.exec_module(mod)
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _private_settings(tmp_path, monkeypatch):
+    """Never read or write the developer's real settings.toml."""
+    from photosheet import settings
+    monkeypatch.setattr(settings, "path", lambda: tmp_path / "PhotoSheet" / "settings.toml")
