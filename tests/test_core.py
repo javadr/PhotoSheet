@@ -77,6 +77,14 @@ def test_preset_roundtrip(tmp_path):
         preset.from_dict({})
 
 
+@pytest.mark.parametrize("d", [{"type": "nup", "page": {"width": 1e7}}, {"type": "nup", "page": {"height": float("nan")}},
+                               {"type": "nup", "page": {"width": 0}}, {"type": "poster", "poster_w": 1e9}])
+def test_preset_rejects_unbounded_sizes(d):
+    from photosheet.core import preset
+    with pytest.raises(ValueError):   # would otherwise exhaust memory when rendered
+        preset.from_dict(d)
+
+
 def _img(tmp_path, name, w, h):
     from PIL import Image
     p = tmp_path / name

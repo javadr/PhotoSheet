@@ -66,8 +66,8 @@ jobs:
       shell: bash
       run: |
         : > /tmp/release_body.md
-        if git tag -l "${{ github.ref_name }}" | grep -q .; then
-          git tag -l --format='%(contents)' "${{ github.ref_name }}" > /tmp/release_body.md
+        if git tag -l "$GITHUB_REF_NAME" | grep -q .; then
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > /tmp/release_body.md
         fi
 
     - name: 'Automatic release'

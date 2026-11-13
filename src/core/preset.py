@@ -17,6 +17,8 @@ TYPES = {"nup": NUp, "single": Single, "poster": Poster, "carousel": Carousel,
          "masonry": Masonry, "shapes": Shapes, "ring": Ring, "scatter": Scatter,
          "slant": Slant, "fan": Fan, "timeline": Timeline, "brick": Brick, "checker": Checker, "stairs": Stairs,
          "pyramid": Pyramid, "diamond": Diamond}
+MAX_PT = 14400        # 200 in, the largest page PDF allows
+MAX_POSTER = 100 * MAX_PT   # ~500 m: far past any real poster, still a bounded page count
 
 
 def kind(layout: Layout) -> str:
@@ -43,7 +45,12 @@ def from_dict(d: dict) -> Layout:
         raise ValueError(f"unknown or missing layout type: {e}") from None
     kw = {k: v for k, v in _known(cls, d).items() if k not in ("page", "images")}
     page = PageExtent(**_known(PageExtent, d.get("page", {})))
+    # A preset may come from anyone: a huge page or poster would make rendering allocate without bound (MemoryError / OOM).
+    if not (0 < page.width <= MAX_PT and 0 < page.height <= MAX_PT):
+        raise ValueError(f"page size must be between 0 and {MAX_PT} pt")
     lay = cls(page=page, **kw)
+    if isinstance(lay, Poster) and not (0 < lay.poster_w <= MAX_POSTER and 0 < lay.poster_h <= MAX_POSTER):
+        raise ValueError(f"poster size must be between 0 and {MAX_POSTER} pt")
     lay.images = [ImageItem(**_known(ImageItem, i)) for i in d.get("images", [])]
     for i in lay.images:   # JSON turns tuples into lists
         i.box = tuple(i.box) if i.box else None
