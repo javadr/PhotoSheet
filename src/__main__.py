@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -11,6 +12,10 @@ def main() -> int:
         from .selftest import run
         rest = [a for a in sys.argv[1:] if a != "--self-test"]
         return run(rest[0] if rest else None)
+    # Wayland doesn't let an app place its own window, so the saved position would be ignored. Prefer XWayland,
+    # where it works; Qt tries wayland next if XWayland is missing. QT_QPA_PLATFORM=wayland opts out.
+    if sys.platform.startswith("linux") and os.environ.get("WAYLAND_DISPLAY") and os.environ.get("DISPLAY"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "xcb;wayland")
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
@@ -23,7 +28,6 @@ def main() -> int:
     app.setWindowIcon(QIcon(str(Path(__file__).parent / "icons" / "photosheet.png")))
     restore_text_size()
     w = MainWindow()
-    w.resize(1200, 800)
     w.show()
     return app.exec()
 
