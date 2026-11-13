@@ -1634,3 +1634,16 @@ def test_wide_insert_saved_as_portrait_still_shows_its_photos(app):
     w.orient.setCurrentText("Portrait")          # what a saved session can bring back
     w.margin.setValue(18)
     assert w.layout_.per_page == 1 and w.orient.currentText() == "Landscape"
+
+
+def test_zoom_buttons_beside_the_page_controls_run_the_view_commands(app):
+    from PySide6.QtWidgets import QToolButton
+    w = MainWindow()
+    btns = {b.accessibleName(): b for b in w.findChildren(QToolButton)}
+    assert all(btns[n].toolTip() for n in ("Zoom In", "Zoom Out", "Actual Size", "Fit to Window"))
+    btns["Actual Size"].click()
+    assert w.zoom == 1.0
+    btns["Zoom Out"].click()
+    assert w.zoom == pytest.approx(0.8)
+    btns["Fit to Window"].click()
+    assert w.zoom is None

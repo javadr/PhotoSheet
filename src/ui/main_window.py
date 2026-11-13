@@ -181,6 +181,38 @@ class _RotateButton(_NavButton):
         p.drawPolyline(QPolygonF([QPointF(4.3, -1.6), QPointF(6.5, 0.4), QPointF(8.3, -1.9)]))
 
 
+class _ZoomButton(_NavButton):
+    """Zoom glyphs in the page buttons' 1.8 pt stroke: SF Symbols' magnifyingglass.plus / .minus for zoom, a
+    "1:1" for actual size and a viewfinder (four corner brackets) for fit to window."""
+
+    def __init__(self, kind: str):
+        super().__init__(False, False)
+        self.kind = kind   # "in" | "out" | "actual" | "fit"
+
+    def _glyph(self, p):
+        if self.kind == "fit":   # a page frame with brackets at its corners
+            for sx in (-1, 1):
+                for sy in (-1, 1):
+                    p.drawPolyline(QPolygonF([QPointF(sx * 6, sy * 2.2), QPointF(sx * 6, sy * 5.5), QPointF(sx * 2.8, sy * 5.5)]))
+        elif self.kind == "actual":   # "1:1" drawn with strokes, so it weighs the same as the other glyphs
+            for x in (-6.5, 6.5):
+                p.drawPolyline(QPolygonF([QPointF(x - 2, -3), QPointF(x, -5), QPointF(x, 5)]))
+            p.drawLine(QPointF(0, -3), QPointF(0, -2.4))   # a short stroke with round caps is a dot
+            p.drawLine(QPointF(0, 2.4), QPointF(0, 3))
+        else:   # SF Symbols' magnifyingglass: a big lens, a heavier handle, a lighter sign inside
+            p.translate(-1.8, -1.8)
+            pen = p.pen()
+            pen.setWidthF(1.6)
+            p.setPen(pen)
+            p.drawEllipse(QPointF(0, 0), 6.2, 6.2)
+            p.drawLine(QPointF(-3, 0), QPointF(3, 0))
+            if self.kind == "in":
+                p.drawLine(QPointF(0, -3), QPointF(0, 3))
+            pen.setWidthF(2.4)
+            p.setPen(pen)
+            p.drawLine(QPointF(4.9, 4.9), QPointF(9.2, 9.2))
+
+
 class _NumberedDelegate(QStyledItemDelegate):
     """Shows each row's position before its file name; the item text itself stays the bare file name."""
     def initStyleOption(self, option, index):
@@ -819,12 +851,25 @@ class MainWindow(QMainWindow):
         self.inches_act = QAction("Rulers in Inches", self, checkable=True)
         for a, fn in ((self.rulers_act, rulers_on), (self.inches_act, rulers_in)):
             a.toggled.connect(fn)   # toggled, not triggered: restoring a setting with setChecked must apply it too
-            v.addAction(a)
+        v.addAction(self.rulers_act)   # the unit is a preference (Edit > Preferences), not a menu item
         v.addSeparator()
-        act(v, "Fit to Window", lambda: self.set_zoom(None), "Ctrl+0")
-        act(v, "Actual Size", lambda: self.set_zoom(1.0), "Ctrl+1")
-        act(v, "Zoom In", lambda: self.set_zoom((self.zoom or self._fit_zoom()) * 1.25), QKeySequence.StandardKey.ZoomIn)
-        act(v, "Zoom Out", lambda: self.set_zoom((self.zoom or self._fit_zoom()) / 1.25), QKeySequence.StandardKey.ZoomOut)
+        fit_a = act(v, "Fit to Window", lambda: self.set_zoom(None), "Ctrl+0")
+        actual_a = act(v, "Actual Size", lambda: self.set_zoom(1.0), "Ctrl+1")
+        in_a = act(v, "Zoom In", lambda: self.set_zoom((self.zoom or self._fit_zoom()) * 1.25), QKeySequence.StandardKey.ZoomIn)
+        out_a = act(v, "Zoom Out", lambda: self.set_zoom((self.zoom or self._fit_zoom()) / 1.25), QKeySequence.StandardKey.ZoomOut)
+        # The same commands as buttons right beside the page controls, so zooming is one click away.
+        nav_row = self._nav_row
+        nav_row.itemAt(0).spacerItem().changeSize(0, 0)   # the zoom buttons take the left side, so the old balancing space goes
+        for i, (kind, a) in enumerate((("out", out_a), ("in", in_a), ("actual", actual_a), ("fit", fit_a))):
+            btn = _ZoomButton(kind)
+            btn.setDefaultAction(a)
+            btn.setToolTip(f"{a.text()} ({a.shortcut().toString(QKeySequence.SequenceFormat.NativeText)})")
+            btn.setAccessibleName(a.text())
+            btn.setAutoRaise(True)
+            btn.setFixedSize(26, 28)
+            nav_row.insertWidget(2 + i, btn)
+        nav_row.insertSpacing(6, 16)
+        nav_row.addSpacing(4 * 26 + 16 - 40)   # balances the zoom buttons (the rotate button's 40 is already there): the page buttons stay centred
         v.addSeparator()
         act(v, "Larger Text", lambda: change_text_size(+1))
         act(v, "Smaller Text", lambda: change_text_size(-1))
@@ -1281,8 +1326,6 @@ class MainWindow(QMainWindow):
             w["size"].setCurrentIndex(max(0, w["size"].findData(p["page"]["size"])))
             w["orientation"].setCurrentIndex(max(0, w["orientation"].findData(p["page"]["orientation"])))
             w["margin"].setValue(p["page"]["margin"])
-            w["caption"].setCurrentIndex(max(0, w["caption"].findData(p["layout"]["caption"])))
-            w["cut_marks"].setChecked(p["layout"]["cut_marks"])
             w["crop_to_fill"].setChecked(p["layout"]["crop_to_fill"])
             w["rulers"].setChecked(p["view"]["rulers"])
             w["ruler_units"].setCurrentIndex(max(0, w["ruler_units"].findData(p["view"]["ruler_units"])))
@@ -1293,8 +1336,7 @@ class MainWindow(QMainWindow):
         w["orientation"] = combo(["Automatic (layout's own)", "Portrait", "Landscape"], "", ["auto", "Portrait", "Landscape"])
         w["margin"] = self._spin(self.margin.minimum(), self.margin.maximum(), 0)
         w["margin"].setSuffix(" pt")
-        w["caption"] = combo([self.caption.itemText(i) for i in range(self.caption.count())], "")
-        w["cut_marks"], w["crop_to_fill"] = check(self.marks.text(), False), check(self.crop.text(), False)
+        w["crop_to_fill"] = check(self.crop.text(), False)
         w["rulers"] = check("Show rulers", False)
         w["ruler_units"] = combo(["Millimetres", "Inches"], "", ["mm", "in"])
         w["pdf_quality"] = combo([k.capitalize() for k in PDF_PRESETS], "", list(PDF_PRESETS))
@@ -1307,7 +1349,7 @@ class MainWindow(QMainWindow):
             t, self.kind.currentText(), self.page_size.currentData(), len(self.layout_.images)) + ".pdf"))
         fill(p)
         for label, key in (("Page", "size"), ("Orientation", "orientation"), ("Margin", "margin"),
-                           ("Caption", "caption"), ("", "cut_marks"), ("", "crop_to_fill"),
+                           ("", "crop_to_fill"),
                            ("", "rulers"), ("Ruler units", "ruler_units"), ("PDF quality", "pdf_quality"),
                            ("File name", "file_name")):
             form.addRow(label, w[key])
@@ -1321,8 +1363,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         p["page"].update(size=w["size"].currentData(), orientation=w["orientation"].currentData(), margin=w["margin"].value())
-        p["layout"].update(caption=w["caption"].currentData(),
-                           cut_marks=w["cut_marks"].isChecked(), crop_to_fill=w["crop_to_fill"].isChecked())
+        p["layout"].update(crop_to_fill=w["crop_to_fill"].isChecked())
         p["view"].update(rulers=w["rulers"].isChecked(),
                          ruler_units=w["ruler_units"].currentData())
         p["export"].update(pdf_quality=w["pdf_quality"].currentData(),
