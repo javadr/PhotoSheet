@@ -304,12 +304,12 @@ def _poster(layout, item, s, printer_profile, background, fast) -> Image.Image:
     return poster
 
 
-def save_pages(pages, path: str, dpi: int, after=None) -> None:
+def save_pages(pages, path: str, dpi: int, after=None, quality: int = 85) -> None:
     """Write pages as one PDF, or as PNG/JPEG files named stem-1.ext, stem-2.ext ... (just `path` for one page).
-    A name without an extension gets .png. after(i) is called once page i is saved."""
+    A name without an extension gets .png. quality (1-95) is the JPEG quality inside a PDF; lower = smaller file. after(i) is called once page i is saved."""
     p = Path(path)
     if p.suffix.lower() == ".pdf":
-        pages[0].save(p, save_all=True, append_images=pages[1:], resolution=dpi)
+        pages[0].save(p, save_all=True, append_images=pages[1:], resolution=dpi, quality=quality)
         return
     p = p if p.suffix else p.with_suffix(".png")
     for i, im in enumerate(pages):

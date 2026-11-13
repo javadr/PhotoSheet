@@ -191,6 +191,7 @@ def main(argv=None) -> int:
     ap.add_argument("--poster-w", type=float, default=16, help="inches")
     ap.add_argument("--poster-h", type=float, default=12, help="inches")
     ap.add_argument("--dpi", type=int, default=150)
+    ap.add_argument("--quality", type=int, default=85, choices=range(1, 96), metavar="1-95", help="PDF image quality; lower = smaller file")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--crop", action="store_true")
     ap.add_argument("--printer-profile")
@@ -200,7 +201,7 @@ def main(argv=None) -> int:
             ap.error(f"no such file: {path}")
     try:
         pages = render_all(build(args), dpi=args.dpi, printer_profile=args.printer_profile)
-        save_pages(pages, args.out, args.dpi)
+        save_pages(pages, args.out, args.dpi, quality=args.quality)
     except (ValueError, OSError) as e:   # a bad option value, an unreadable photo, an unwritable output
         ap.error(str(e))
     return 0

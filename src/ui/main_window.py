@@ -95,6 +95,7 @@ def change_text_size(delta: float, persist: bool = True) -> None:
         QSettings("PhotoSheet", "PhotoSheet").setValue("fontPt", f.pointSizeF())
 
 
+PDF_PRESETS = {"print quality": (95, 300), "standard": (80, 200), "small file": (60, 150)}   # (JPEG quality, dpi)
 IMG_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
 
 
@@ -253,8 +254,8 @@ class _ExportJob(QRunnable):
         self.cancelled = False
         self.ready = threading.Event()   # set once the user has chosen a path, or cancelled
 
-    def choose(self, path):
-        self.path = path
+    def choose(self, path, quality=85, dpi=300):
+        self.path, self.quality, self.dpi = path, quality, dpi
         self.ready.set()
 
     def cancel(self):
@@ -282,7 +283,9 @@ class _ExportJob(QRunnable):
                 return
             self.sig.export_progress.emit(920, "Saving")
             f = self.path
-            save_pages(pages, f, 300, after=lambda i: self.sig.export_progress.emit(920 + 80 * (i + 1) // n, "Saving"))
+            if self.dpi != 300:   # pages are rendered at 300 dpi; shrink them for the smaller presets
+                pages = [p.resize((round(p.width * self.dpi / 300), round(p.height * self.dpi / 300)), Image.LANCZOS) for p in pages]
+            save_pages(pages, f, self.dpi, quality=self.quality, after=lambda i: self.sig.export_progress.emit(920 + 80 * (i + 1) // n, "Saving"))
             res = None
         except Cancelled:
             return
@@ -2258,13 +2261,13 @@ class MainWindow(QMainWindow):
         job = self._export = _ExportJob(copy.deepcopy(self.layout_), self.sig)   # snapshot: later edits don't leak in
         self._export_pm, self._export_stage = 0, ""
         self.pool.start(job)   # rendering runs while the file dialog is open
-        f, _ = QFileDialog.getSaveFileName(self, "Export", "sheet.pdf", "PDF (*.pdf);;PNG (*.png)")
+        f, flt = QFileDialog.getSaveFileName(self, "Export", "sheet.pdf", "PDF, print quality (*.pdf);;PDF, standard (*.pdf);;PDF, small file (*.pdf);;PNG (*.png)")
         if not f:
             job.cancel()
             self._export = None
             return
         self._export_name = os.path.basename(f)
-        job.choose(f)
+        job.choose(f, *next((v for k, v in PDF_PRESETS.items() if k in flt), (85, 300)))
         self._export_popup()
 
     def _export_popup(self):
