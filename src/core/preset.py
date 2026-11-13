@@ -6,7 +6,7 @@ from dataclasses import asdict, fields
 
 from .geometry import PageExtent
 from .layouts import (Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb,
-                      Brick, Checker, Diamond, Pyramid, Fan, ImageItem, Layout, Masonry, Mosaic, NUp, Package, Passport, Polaroid, Poster, Ring,
+                      Brick, Cassette, Checker, Disc, DiscCover, Diamond, VHS, Pyramid, Fan, ImageItem, Layout, Masonry, Mosaic, NUp, Package, Passport, Polaroid, Poster, Ring,
                       Scatter, Shapes, Single, Slant, Spiral, Stairs, Strip, Timeline, Triptych)
 
 TYPES = {"nup": NUp, "single": Single, "poster": Poster, "carousel": Carousel,
@@ -16,7 +16,7 @@ TYPES = {"nup": NUp, "single": Single, "poster": Poster, "carousel": Carousel,
          "bento": Bento, "spiral": Spiral, "honeycomb": Honeycomb, "calendar": Calendar,
          "masonry": Masonry, "shapes": Shapes, "ring": Ring, "scatter": Scatter,
          "slant": Slant, "fan": Fan, "timeline": Timeline, "brick": Brick, "checker": Checker, "stairs": Stairs,
-         "pyramid": Pyramid, "diamond": Diamond}
+         "pyramid": Pyramid, "diamond": Diamond, "disc": Disc, "cassette": Cassette, "vhs": VHS, "cover": DiscCover}
 MAX_PT = 14400        # 200 in, the largest page PDF allows
 MAX_POSTER = 100 * MAX_PT   # ~500 m: far past any real poster, still a bounded page count
 

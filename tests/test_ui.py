@@ -1100,8 +1100,8 @@ def test_layout_menu_is_grouped_headings_cannot_be_picked_and_every_layout_is_li
     model = w.kind.model()
     rows = [(model.item(i).text(), bool(model.item(i).flags() & Qt.ItemFlag.ItemIsEnabled)) for i in range(model.rowCount())]
     headings = [t for t, ok in rows if not ok]
-    assert headings == [g for g, _ in KIND_GROUPS]                                     # five headings, none selectable
-    assert sorted(t for t, ok in rows if ok) == sorted(KINDS) and len(KINDS) == 32   # every layout is under exactly one heading
+    assert headings == [g for g, _ in KIND_GROUPS]                                     # six headings, none selectable
+    assert sorted(t for t, ok in rows if ok) == sorted(KINDS) and len(KINDS) == 36   # every layout is under exactly one heading
     assert w.kind.currentText() == "N-up" and bool(model.item(w.kind.currentIndex()).flags() & Qt.ItemFlag.ItemIsEnabled)
     # the order on screen is heading, its layouts, next heading...
     expect = [x for g, names in KIND_GROUPS for x in (g, *names)]
@@ -1605,3 +1605,32 @@ def test_rotate_page_button_toggles_orientation(app, tmp_path):
     before = (w.layout_.page.width, w.layout_.page.height)
     w.flip_page.trigger()
     assert (w.layout_.page.width, w.layout_.page.height) == before[::-1]
+
+
+def test_disc_size_preset_follows_edits_and_resets(app):
+    from photosheet.ui.main_window import DISC_PRESETS
+    w = MainWindow()
+    w.kind.setCurrentText("CD / DVD")
+    assert w.disc_size.currentText().startswith("CD / DVD standard") and not w.marks.isVisible()
+    w.disc_hole.setValue(30)
+    assert w.disc_size.currentText() == "Custom"
+    w.disc_size.setCurrentIndex(0)
+    w.disc_size.activated.emit(0)
+    assert (w.diameter.value(), w.disc_hole.value()) == DISC_PRESETS[w.disc_size.currentText()]
+
+
+def test_wide_inserts_switch_to_landscape_even_after_the_user_picked_portrait(app):
+    w = MainWindow()
+    w.orient.setCurrentText("Portrait")
+    w._orient_touched = True
+    for kind in ("VHS", "Disc cover"):
+        w.kind.setCurrentText(kind)
+        assert w.orient.currentText() == "Landscape" and w.layout_.per_page == 1
+
+
+def test_wide_insert_saved_as_portrait_still_shows_its_photos(app):
+    w = MainWindow()
+    w.kind.setCurrentText("VHS")
+    w.orient.setCurrentText("Portrait")          # what a saved session can bring back
+    w.margin.setValue(18)
+    assert w.layout_.per_page == 1 and w.orient.currentText() == "Landscape"

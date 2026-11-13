@@ -91,7 +91,7 @@ def run(report: str | None = None) -> int:
                 im = render_page(lay, 0, dpi=40)
                 if im.size != (round(w * 40 / 72), round(h * 40 / 72)):
                     raise RuntimeError(f"{key}: wrong page size {im.size}")
-                if im.convert("L").getextrema()[0] > 250:
+                if getattr(lay, "per_page", 1) and im.convert("L").getextrema()[0] > 250:   # an insert wider than the page prints nothing
                     raise RuntimeError(f"{key}: the page came out blank")
             path = tmp / f"{key}.json"
             preset.save(lay, str(path))

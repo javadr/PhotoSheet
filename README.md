@@ -71,6 +71,10 @@ photosheet-cli photos/*.jpg -o calendar.png --layout calendar --year 2027 --crop
 | **Checker**       | A chessboard: photos on every other square, the rest filled with a pale tint. Rows, columns and gutter are set in the Layout panel; tick *First cell empty* to start the pattern on the second square.            |
 | **Pyramid**       | Rows of 1, 2, 3 ... photos, each row centred, forming a triangle. Set the row count in the Layout panel.                                                                                                          |
 | **Diamond**       | Rows widen to the middle, then narrow again (1, 2, 3, 2, 1 for 5 rows).                                                                                                                                           |
+| **CD / DVD**      | Disc labels (118 mm, 41 mm hole): one photo over the disc, or 2 to 12 wedges (`--per-disc`, `--hole`), optionally the same photo in every wedge (`--tile`). |
+| **Disc cover**    | CD jewel case (120 × 120 mm booklet + 150 × 118 mm tray card) or DVD case (273 × 183 mm wrap, 14 mm spine); `--cover-size`, `--mode`. |
+| **Cassette**      | J-card: front 65.1, spine 12.7, flap 27 mm × 101.6 mm. `--mode` spreads one photo across it, fills the front only, runs one photo over the two big panels, or gives each panel its own photo. |
+| **VHS**           | Sleeve wrap: back 104, spine 25, front 104 mm × 188 mm; same `--mode` choices as Cassette. |
 | **Stairs**        | Photos step down the page from top left to bottom right, each overlapping the one before. Set the photos per page in the Layout panel; tick *Climb to the top right* to start at the bottom left and step up.     |
 
 **Working with the page**

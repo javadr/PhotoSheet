@@ -8,6 +8,7 @@ import os
 import random
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
+from typing import ClassVar
 
 from .geometry import PageExtent, Rect, bbox, ceil_div
 
@@ -80,8 +81,11 @@ class Layout:
 
     # Rendering hooks. shape "ellipse" crops every photo to a circle; the colours style captions and cards.
     shape = "rect"
+    fill_slots = False   # True: every photo is cropped to fill its slot
     auto_rotate = False  # False: photos fitted whole stay upright instead of turning to match their slot
     caption_color = (70, 70, 70)
+    guide_width = 0.4    # points: thickness of cut_guides lines
+    guide_gray = 140
 
     def shapes(self, page: int) -> list[tuple[str, Rect, tuple]]:
         """Decoration drawn under the photos: (kind, rect, rgb). Kinds: card (filled, outlined), rect, round,
@@ -1869,3 +1873,251 @@ class Diamond(Pyramid):
     """Rows of 1, 2 ... up to the middle row, then back down to 1: a diamond of photos."""
     def _counts(self) -> list[int]:
         return [min(i, self.rows - 1 - i) + 1 for i in range(self.rows)]
+
+
+@dataclass
+class Disc(Badges):
+    """CD/DVD labels: discs packed on the page with a centre hole, and 1 or more photos each.
+
+    per_disc = 1 spreads one photo over the whole disc; more splits the disc into that many equal pie wedges.
+    Each disc takes the next per_disc photos in order, or just one photo (tile) shown in every wedge. Sizes in points; 118 mm / 41 mm is the printable label area.
+    """
+    diameter: float = 118 * MM
+    gutter: float = 4.0
+    staggered: bool = False
+    hole: float = 41 * MM
+    per_disc: int = 1
+    tile: bool = False         # repeat each disc's one photo in all its wedges instead of using a new photo per wedge
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not 1 <= self.per_disc <= 12 or not 0 <= self.hole < self.diameter:
+            raise ValueError("per_disc must be between 1 and 12 and the hole smaller than the disc")
+
+    @property
+    def _take(self) -> int:
+        """Photos each disc uses up."""
+        return 1 if self.tile else self.per_disc
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(ceil_div(len(self.images), self._take), self.per_page)) if self.per_page else 1
+
+    def _discs(self, page: int):
+        """(first image index, centre x, centre y) of each disc on the page that has photos."""
+        pos, d = self._positions(), self.diameter + 2 * self.bleed
+        return [(g * self._take, x + d / 2, y + d / 2) for k, (x, y) in enumerate(pos)
+                if (g := page * len(pos) + k) * self._take < len(self.images)]
+
+    def wedges(self, first: int, cx: float, cy: float, grow: float = 0.0):
+        """(photo, polygon) of each wedge of the disc centred at cx, cy. grow (points) pushes every edge outwards."""
+        from .geometry import wedge_polygon
+        n, r = self.per_disc, self.diameter / 2
+        # wedges overlap a little at their seams, or an antialiased shared edge leaves a pale hairline; one wedge has no seam
+        e = math.degrees(max(grow, 0.6) / (r / 2)) if n > 1 else 0.0
+        photos = [self.images[first]] * n if self.tile else self.images[first:first + n]
+        return [(img, wedge_polygon(cx, cy, r + grow, 360 * i / n - e, 360 * (i + 1) / n + e, max(0.0, self.hole / 2 - grow),
+                                    steps=max(32, int(360 / n / 2 + e))))
+                for i, img in enumerate(photos)]
+
+    def _polys(self, page: int):
+        return [w for first, cx, cy in self._discs(page) for w in self.wedges(first, cx, cy)]
+
+    def slots(self, page: int):
+        return [(img, bbox(poly)) for img, poly in self._polys(page)]
+
+    def outlines(self, page: int):
+        return [poly for _, poly in self._polys(page)]
+
+
+CASE_MODES = ("spread", "front", "outer", "pair", "each")
+
+
+@dataclass
+class Case(Layout):
+    """Printed insert for a media case: its panels side by side.
+
+    Inserts are tiled over the page as far as they fit. `mode` decides how photos use the panels:
+    spread = one photo across the whole insert; front = one photo on the front panel, the rest blank;
+    outer = one photo running across the two big panels (the narrow spine between them left blank);
+    pair = a photo on each big panel; each = a photo on every panel.
+    Panels are 1 mm apart so they read as separate parts. A fine pale line runs round every panel (shared lines sit in
+    the middle of the gap, so they show even where there is no photo) with a tick above and below each fold.
+    """
+    gutter: float = 4.0
+    mode: str = "spread"
+    fill_slots = True          # every panel is filled: a spine would hold a tiny uncropped photo
+    guide_width = 0.3 * MM     # a 0.3 mm pale line in the middle of each 1 mm gap
+    guide_gray = 175
+    GAP: ClassVar[float] = 1.0     # mm between panels; the fold is in the middle
+    SPACE: ClassVar[float] = 10.0  # mm of white between inserts on a page, on top of the gutter
+    PAD: ClassVar[float] = 3.5     # mm above and below the panels, room for the fold ticks
+    PANELS: ClassVar[tuple] = ()   # (width, height) in mm, left to right, tops aligned
+    SPINES: ClassVar[tuple] = ()   # indices of the narrow panels
+    FRONT: ClassVar[int] = 0       # index of the front cover panel
+
+    def __post_init__(self):
+        if self.mode not in CASE_MODES or self.gutter < 0:
+            raise ValueError(f"mode must be one of {CASE_MODES} and gutter >= 0")
+
+    def panels(self) -> tuple:
+        return self.PANELS
+
+    def _big(self) -> list[int]:
+        return [i for i in range(len(self.panels())) if i not in self.SPINES]
+
+    @property
+    def per_insert(self) -> int:
+        """Photos each insert uses up."""
+        return {"spread": 1, "front": 1, "outer": 1, "pair": len(self._big()), "each": len(self.panels())}[self.mode]
+
+    def _fit(self) -> tuple[float, float, int, int]:
+        """(insert width, height, columns, rows) on the page. Inserts are never turned: a photo must stay upright to the folds."""
+        pn = self.panels()
+        uw = (sum(w for w, _ in pn) + self.GAP * (len(pn) - 1)) * MM
+        uh = (max(h for _, h in pn) + 2 * self.PAD) * MM
+        g, p = self.gutter + self.SPACE * MM, self.page
+        return uw, uh, max(0, int((p.imageable_w + g) // (uw + g))), max(0, int((p.imageable_h + g) // (uh + g)))
+
+    @property
+    def per_page(self) -> int:
+        _, _, cols, rows = self._fit()
+        return cols * rows
+
+    @property
+    def pages(self) -> int:
+        return max(1, ceil_div(ceil_div(len(self.images), self.per_insert), self.per_page)) if self.per_page else 1
+
+    def _unit(self, imgs: list) -> tuple[list[tuple], list[tuple]]:
+        """One insert with its origin at the top left: ((image, rect, outline or None) items, fold tick segments)."""
+        pn, gap, pad, x, rects = self.panels(), self.GAP * MM, self.PAD * MM, 0.0, []
+        tall = max(h for _, h in pn) * MM
+        for w, h in pn:   # panels of different heights (a CD booklet is 2 mm taller than its tray) share a centre line
+            rects.append(Rect(x, pad + (tall - h * MM) / 2, w * MM, h * MM))
+            x += w * MM + gap
+        top, bottom, mid = pad, pad + tall, pad + tall / 2
+        h2, ticks = gap / 2, []
+        for r in rects[:-1]:
+            f = r.x + r.w + gap / 2
+            ticks += [(f, top - 0.5 * MM, f, top - 3.5 * MM), (f, bottom + 0.5 * MM, f, bottom + 3.5 * MM)]
+        for r in rects:   # every panel's outline, half a gap out
+            x0, y0, x1, y1 = r.x - h2, r.y - h2, r.x + r.w + h2, r.y + r.h + h2
+            ticks += [(x0, y0, x1, y0), (x1, y0, x1, y1), (x1, y1, x0, y1), (x0, y1, x0, y0)]
+        big, mode = self._big(), self.mode
+
+        def chain(rs):
+            """One polygon over several panels. The edges that join them run forward and back along the top of the
+            shortest panel, so they touch and enclose nothing: the gaps stay blank (and no line crosses a spine)."""
+            if len(rs) == 1:
+                return None
+            mid = max(r.y for r in rs)
+            fwd = []
+            for i, r in enumerate(rs):
+                fwd += ([(r.x, mid)] if i else []) + [(r.x, r.y), (r.x + r.w, r.y)] + ([(r.x + r.w, mid)] if i < len(rs) - 1 else [])
+            last, left, back = rs[-1], rs[-1].x, []
+            fwd += [(last.x + last.w, last.y + last.h), (last.x, last.y + last.h)]
+            for r in reversed(rs[:-1]):
+                back += [(left, mid), (r.x + r.w, mid), (r.x + r.w, r.y + r.h), (r.x, r.y + r.h)]
+                left = r.x
+            return fwd + back
+
+        def box(rs):
+            y0 = min(r.y for r in rs)
+            return Rect(rs[0].x, y0, rs[-1].x + rs[-1].w - rs[0].x, max(r.y + r.h for r in rs) - y0)
+        if mode == "spread":
+            return [(imgs[0], box(rects), chain(rects))], ticks
+        if mode == "front":
+            return [(imgs[0], rects[self.FRONT], None)], ticks
+        if mode == "outer":
+            rs = [rects[big[0]], rects[big[-1]]] if len(big) > 1 else [rects[big[0]]]
+            return [(imgs[0], box(rs), chain(rs))], ticks
+        use = big if mode == "pair" else range(len(rects))
+        return [(img, rects[i], None) for img, i in zip(imgs, use)], ticks
+
+    def _placed(self, page: int):
+        """(items, tick segments) of every insert on the page, in page points."""
+        if not self.per_page:
+            return [], []
+        uw, uh, cols, rows = self._fit()
+        p, g, n = self.page, self.gutter + self.SPACE * MM, self.per_insert
+        x0 = p.left + (p.imageable_w - (cols * uw + (cols - 1) * g)) / 2
+        y0 = p.top + (p.imageable_h - (rows * uh + (rows - 1) * g)) / 2
+        items, ticks, start = [], [], page * self.per_page * n
+
+        def pt(ox, oy, x, y):
+            return (ox + x, oy + y)
+        for k in range(self.per_page):
+            imgs = self.images[start + k * n:start + (k + 1) * n]
+            if not imgs:
+                break
+            r, c = divmod(k, cols)
+            ox, oy = x0 + c * (uw + g), y0 + r * (uh + g)
+            its, tk = self._unit(imgs)
+            for img, rc, poly in its:
+                (ax, ay), (bx, by) = pt(ox, oy, rc.x, rc.y), pt(ox, oy, rc.x + rc.w, rc.y + rc.h)
+                items.append((img, Rect(min(ax, bx), min(ay, by), abs(bx - ax), abs(by - ay)),
+                              poly and [pt(ox, oy, x, y) for x, y in poly]))
+            ticks += [pt(ox, oy, a, b) + pt(ox, oy, c2, d) for a, b, c2, d in tk]
+        return items, ticks
+
+    def _items(self, page: int):
+        return self._placed(page)[0]
+
+    def slots(self, page: int):
+        return [(img, r) for img, r, _ in self._items(page)]
+
+    def outlines(self, page: int):
+        items = self._items(page)
+        return [poly or [(r.x, r.y), (r.x + r.w, r.y), (r.x + r.w, r.y + r.h), (r.x, r.y + r.h)] for _, r, poly in items] \
+            if any(poly for *_, poly in items) else None
+
+    def cut_guides(self, page: int):
+        return self._placed(page)[1]   # fold ticks, always: there is no cut line to draw
+
+
+@dataclass
+class Cassette(Case):
+    """Cassette J-card, unfolded: front 65.1 mm, spine 12.7 mm, back flap 27 mm, all 101.6 mm (4 in) tall.
+
+    Sizes from the common Norelco-case templates (65.1 / 12.7 / 27 mm = 104.8 mm wide); makers differ by a mm or two.
+    """
+    PANELS: ClassVar[tuple] = ((65.1, 101.6), (12.7, 101.6), (27.0, 101.6))
+    SPINES: ClassVar[tuple] = (1,)
+
+
+@dataclass
+class VHS(Case):
+    """VHS sleeve wrap, left to right: back 104 mm, spine 25 mm, front 104 mm, 188 mm tall (tape size 188 x 104 x 25 mm).
+
+    Matches the 233 mm wide VHS slipcover wrap; the slipcover's top and bottom flaps are not included.
+    """
+    PANELS: ClassVar[tuple] = ((104, 188), (25, 188), (104, 188))
+    SPINES: ClassVar[tuple] = (1,)
+    FRONT: ClassVar[int] = 2
+
+
+COVER_SIZES = ("CD", "DVD")
+
+
+@dataclass
+class DiscCover(Case):
+    """Cover for a disc case. CD (jewel case): booklet 120 x 120 mm, then the back tray card 150 x 118 mm
+    (a 137 mm back between two 6.5 mm spines, each with its own fold).
+    DVD (standard case): back 129.5, spine 14, front 129.5 mm, 183 mm tall (273 mm wrap)."""
+    size: str = "CD"
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.size not in COVER_SIZES:
+            raise ValueError(f"size must be one of {COVER_SIZES}")
+
+    def panels(self) -> tuple:
+        return ((120, 120), (6.5, 118), (137, 118), (6.5, 118)) if self.size == "CD" else ((129.5, 183), (14, 183), (129.5, 183))
+
+    @property
+    def SPINES(self):   # noqa: N802
+        return (1, 3) if self.size == "CD" else (1,)
+
+    @property
+    def FRONT(self):    # noqa: N802
+        return 0 if self.size == "CD" else 2

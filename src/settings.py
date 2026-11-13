@@ -14,7 +14,7 @@ import tomli_w
 DEFAULTS = {
     "page": {"size": "A4", "orientation": "auto", "margin": 18},   # orientation: auto | Portrait | Landscape; margin in pt
     "layout": {"kind": "N-up", "caption": "None", "cut_marks": False, "crop_to_fill": True},
-    "view": {"font_pt": 0.0, "rulers": True, "ruler_units": "mm", "show_all_pages": True},   # font_pt 0: system size
+    "view": {"font_pt": 0.0, "rulers": True, "ruler_units": "mm"},   # font_pt 0: system size
     "export": {"pdf_quality": "standard",   # print quality | standard | small file
                "file_name": "photosheet-{date}-{n:02}"},   # see NAME_FIELDS
     "paths": {"images_dir": "", "presets_dir": "", "export_dir": ""},
@@ -25,7 +25,7 @@ DEFAULTS = {
 
 
 # Examples, for help text. {n} and {photos} are numbers, so {n:03} pads to 001.
-NAME_FIELDS = {"date": "2026-11-13", "time": "174502", "layout": "N-up", "page": "A4", "photos": "12",
+NAME_FIELDS = {"date": "20261113", "time": "174502", "layout": "N-up", "page": "A4", "photos": "12",
                "n": "1, 2, 3… first number not yet used", "n:03": "001, 002…"}
 _BAD_CHARS = str.maketrans({c: "-" for c in '<>:"/\\|?*'})   # not allowed in Windows file names
 
@@ -34,7 +34,7 @@ def file_name(pattern: str, layout: str = "", page: str = "", photos: int = 0, n
     """The file name (no extension) for a naming pattern such as "photosheet-{date}-{n:02}".
     A pattern that can't be filled (unknown field, stray brace) or comes out empty falls back to the default."""
     now = now or datetime.datetime.now()
-    fields = {"date": now.strftime("%Y-%m-%d"), "time": now.strftime("%H%M%S"),   # no colons: Windows forbids them
+    fields = {"date": now.strftime("%Y%m%d"), "time": now.strftime("%H%M%S"),   # no colons: Windows forbids them
               "layout": layout, "page": page, "photos": photos, "n": n}
     try:
         name = pattern.format_map(fields)

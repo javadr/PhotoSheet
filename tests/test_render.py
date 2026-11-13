@@ -732,3 +732,41 @@ def test_cli_bad_input_is_a_clean_error(tmp_path, red, args):
     with pytest.raises(SystemExit) as e:   # argparse's error(): message on stderr, exit code 2, no traceback
         cli.main([*imgs, *args, "-o", str(tmp_path / "o.png"), "--dpi", "20"])
     assert e.value.code == 2
+
+
+def test_disc_has_a_hole_and_cassette_fills_its_spine(red):
+    from photosheet.core.layouts import Cassette, Disc, ImageItem
+    pg = PageExtent(400, 400)
+    d = Disc(page=pg, diameter=300, hole=100, gutter=0, marks=False)
+    d.add(ImageItem(red))
+    im = render_page(d, 0, dpi=72)
+    assert im.getpixel((200, 200)) == (255, 255, 255) and im.getpixel((200, 60)) != (255, 255, 255)
+    c = Cassette(page=PageExtent(595, 842), mode="each")
+    for _ in range(3):
+        c.add(ImageItem(red))
+    spine = c.slots(0)[1][1]
+    assert render_page(c, 0, dpi=72).getpixel((int(spine.x + spine.w / 2), int(spine.y + spine.h / 2))) != (255, 255, 255)
+
+
+def test_cassette_front_only_leaves_the_spine_white_and_outer_skips_it(red):
+    from photosheet.core.layouts import Cassette, ImageItem
+    def spine_px(mode):
+        c = Cassette(page=PageExtent(595, 842), mode=mode)
+        c.add(ImageItem(red))
+        sp = c.slots(0)
+        r = Cassette(page=PageExtent(595, 842), mode="each")
+        for _ in range(3):
+            r.add(ImageItem(red))
+        s = r.slots(0)[1][1]
+        return render_page(c, 0, dpi=72).getpixel((int(s.x + s.w / 2), int(s.y + s.h / 2)))
+    assert spine_px("front") == (255, 255, 255) and spine_px("outer") == (255, 255, 255) and spine_px("spread") != (255, 255, 255)
+
+
+def test_feathered_disc_keeps_a_crisp_centre_and_blends_wedges_instead_of_fading_them(red):
+    from photosheet.core.layouts import Disc, ImageItem
+    d = Disc(page=PageExtent(400, 400), diameter=300, hole=100, gutter=0, per_disc=4, tile=True, feather=20)
+    d.add(ImageItem(red))
+    im = render_page(d, 0, dpi=72)
+    assert im.getpixel((200, 200)) == (255, 255, 255)                      # the hole stays empty
+    assert im.getpixel((200, 80)) != (255, 255, 255) and im.getpixel((330, 200)) != (255, 255, 255)   # on the seams: photo, not a white fade
+    assert im.getpixel((200, 52)) != (255, 255, 255)                       # the rim fades, so it is lighter than the photo only at the very edge

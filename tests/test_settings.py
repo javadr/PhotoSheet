@@ -87,11 +87,11 @@ def test_preferences_restore_defaults_then_ok_applies_and_saves(app, monkeypatch
 def test_file_name_pattern():
     import datetime
     now = datetime.datetime(2026, 11, 13, 9, 5, 7)
-    assert settings.file_name(settings.DEFAULTS["export"]["file_name"], now=now) == "photosheet-2026-11-13-01"
+    assert settings.file_name(settings.DEFAULTS["export"]["file_name"], now=now) == "photosheet-20261113-01"
     assert settings.file_name("{layout} {page} x{photos}", "N-up", "A4", 12, now=now) == "N-up A4 x12"
-    assert settings.file_name("trip/{date}: day?", now=now) == "trip-2026-11-13- day-"   # no Windows-illegal chars
+    assert settings.file_name("trip/{date}: day?", now=now) == "trip-20261113- day-"   # no Windows-illegal chars
     for bad in ("{nope}", "{date", "{0}", "{date.year}", "{date:%Y}", "", " . "):   # unusable: the default name
-        assert settings.file_name(bad, now=now) == "photosheet-2026-11-13-01"
+        assert settings.file_name(bad, now=now) == "photosheet-20261113-01"
 
 
 def test_export_suggests_name_from_pattern(app, monkeypatch, tmp_path):

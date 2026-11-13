@@ -10,7 +10,7 @@ from .core.geometry import PageExtent
 from .core.layouts import (BADGE_SIZES, BENTO, MM, RECIPES, SHAPE_NAMES, Badges, Bento, Calendar, Carousel, Collage, Feature, Filmstrip,
                            FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic, NUp, Package, Passport,
                            Brick, Checker, Diamond, Pyramid, Fan, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs, Strip,
-                           Timeline, Triptych)
+                           Timeline, Triptych, Cassette, Disc, DiscCover, VHS, CASE_MODES, COVER_SIZES)
 from .core.preset import TYPES
 from .core.render import render_all, save_pages
 
@@ -84,6 +84,13 @@ def build(args) -> NUp | Single | Poster:
     elif args.layout == "checker":
         lay = Checker(page=page, gutter=args.gutter, first_empty=args.first_empty, **({} if args.rows is None else {"rows": args.rows}),
                       **({} if args.cols is None else {"columns": args.cols}))
+    elif args.layout == "disc":
+        lay = Disc(page=page, diameter=(args.diameter if args.diameter != 25 else 118) * MM, hole=args.hole * MM,
+                   per_disc=args.per_disc, gutter=args.gutter, tile=args.tile)
+    elif args.layout in ("cassette", "vhs", "cover"):
+        extra = {"size": args.cover_size} if args.layout == "cover" else {}
+        lay = {"cassette": Cassette, "vhs": VHS, "cover": DiscCover}[args.layout](
+            page=page, gutter=args.gutter, mode=args.mode, **extra)
     elif args.layout in ("pyramid", "diamond"):
         lay = {"pyramid": Pyramid, "diamond": Diamond}[args.layout](page=page, gutter=args.gutter, **({} if args.rows is None else {"rows": args.rows}))
     elif args.layout == "brick":
@@ -150,6 +157,11 @@ def main(argv=None) -> int:
     ap.add_argument("--half-cells", action="store_true", help="honeycomb: also show the partial cells at the page edges")
     ap.add_argument("--no-half-tiles", action="store_true", help="brick: leave the ends of the shifted rows white")
     ap.add_argument("--fill", action="store_true", help="honeycomb: stretch the cells to cover the whole page")
+    ap.add_argument("--hole", type=float, default=41, help="disc: centre hole, mm (41 stacking ring, 22 for a full-face label)")
+    ap.add_argument("--per-disc", type=int, default=1, help="disc: photos on each disc (1 = one photo over the whole disc)")
+    ap.add_argument("--tile", action="store_true", help="disc: show one photo in every wedge of each disc")
+    ap.add_argument("--mode", choices=CASE_MODES, default="spread", help="cassette/vhs/cover: spread = one photo across all panels; front = front panel only; outer = one photo across the two big panels; pair = a photo on each big panel; each = a photo on every panel")
+    ap.add_argument("--cover-size", choices=COVER_SIZES, default="CD", help="cover: CD jewel case or DVD case")
     ap.add_argument("--square", action="store_true", help="badges: square grid instead of staggered rows")
     ap.add_argument("--thumbs", type=int, default=4, help="feature: number of small photos next to the hero")
     ap.add_argument("--side", action="store_true", help="feature: small photos in a column beside the hero")

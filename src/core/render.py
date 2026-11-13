@@ -15,8 +15,8 @@ from dataclasses import replace
 from PIL import Image, ImageCms, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from .effects import apply_effects
-from .geometry import Rect, Rotation, fit
-from .layouts import Brick, Carousel, Collage, ImageItem, Layout, Poster, Triptych
+from .geometry import Rect, Rotation, bbox, fit
+from .layouts import Brick, Carousel, Collage, Disc, ImageItem, Layout, Poster, Triptych
 
 _SRGB = None
 
@@ -227,6 +227,28 @@ def _place_cut(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect
     canvas.paste(tmp, (round(slot.x * s), round(slot.y * s)), _fade(m.resize((w, h), Image.LANCZOS), feather * s / 2))
 
 
+def _render_feathered_discs(canvas, layout, page, s, fast, background, printer_profile, progress, cancel):
+    """Discs with a soft edge: the wedges overlap and blend into each other, and only the disc's own rim and hole fade out."""
+    from .geometry import wedge_polygon
+    get = _prefetch([i for i, _ in layout.slots(page)], printer_profile, fast, progress, cancel)
+    f, grow = layout.feather * s / 2, layout.feather
+    for first, cx, cy in layout._discs(page):
+        if cancel and cancel():
+            raise Cancelled()
+        tmp = canvas.copy()
+        for item, poly in layout.wedges(first, cx, cy, grow):   # pushed past the rim and hole, so only the seams blend
+            _place_cut(tmp, replace(item, rotation=0), get(item), bbox(poly), poly, s, fast, background, layout.feather)
+        ring = wedge_polygon(cx, cy, layout.diameter / 2, 0, 360, layout.hole / 2, steps=180)
+        pad, box = math.ceil(f * 3) + 2, bbox(ring)
+        x0, y0 = round(box.x * s) - pad, round(box.y * s) - pad
+        w, h = round(box.w * s) + 2 * pad, round(box.h * s) + 2 * pad
+        m = Image.new("L", (w * 4, h * 4), 0)
+        ImageDraw.Draw(m).polygon([((x * s - x0) * 4, (y * s - y0) * 4) for x, y in ring], fill=255)
+        mask = _fade(m.resize((w, h), Image.LANCZOS), f)
+        canvas.paste(tmp.crop((x0, y0, x0 + w, y0 + h)), (x0, y0), mask)
+    return canvas
+
+
 def _place(canvas: Image.Image, item: ImageItem, im: Image.Image, slot: Rect, s: float,
            fast: bool = False, shape: str | None = None) -> None:
     f = fit(im.width, im.height, slot.scaled(s), item.crop, Rotation(item.turn(slot.w, slot.h)), item.hpan, item.vpan)
@@ -429,12 +451,14 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
             ImageDraw.Draw(mask).polygon([(x * s, y * s) for x, y in poly], fill=255)
             canvas.paste(tmp, mask=_fade(mask, layout.feather * s / 2))
         return canvas
+    if isinstance(layout, Disc) and layout.feather:
+        return _render_feathered_discs(canvas, layout, page, s, fast, background, printer_profile, progress, cancel)
     draw = ImageDraw.Draw(canvas)
     round_photos = layout.shape != "rect"
 
     def guides():
         for x0, y0, x1, y1 in layout.cut_guides(page):
-            draw.line((x0 * s, y0 * s, x1 * s, y1 * s), fill=(140, 140, 140), width=max(1, round(0.4 * s)))
+            draw.line((x0 * s, y0 * s, x1 * s, y1 * s), fill=(layout.guide_gray,) * 3, width=max(1, round(layout.guide_width * s)))
 
     if not round_photos:
         guides()   # under the photos, so they never cover an image
@@ -481,7 +505,7 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
         if polys is not None and k < len(polys):
             _place_cut(canvas, item, photo, slot, polys[k], s, fast, background, layout.feather)
             continue
-        if round_photos:
+        if round_photos or layout.fill_slots:
             item = replace(item, crop=True)   # a circle is always filled
         if layout.feather:   # draw on a transparent tile, soften its edge, then lay it over what is already there
             w, h = max(1, round(slot.w * s)), max(1, round(slot.h * s))

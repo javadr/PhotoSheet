@@ -1014,3 +1014,68 @@ def test_slant_zigzag_alternates_cuts_and_timeline_first_right_flips_sides():
     pos = lambda lay: [c.x for _, c, _ in (setattr(lay, "images", ["a", "b"]), lay._cells(0)[0])[1]]
     a, b = pos(Timeline(page=page)), pos(Timeline(page=page, first_right=True))
     assert a[0] < a[1] and b[0] > b[1]   # portrait page: photo 1 left of the line by default, right with the option
+
+
+# ---- Disc, Cassette, VHS, Disc cover ----
+def test_disc_wedges_tile_and_round_trip():
+    from photosheet.core import preset
+    from photosheet.core.layouts import Disc, ImageItem
+    pg = PageExtent(595, 842)
+    d = Disc(page=pg, per_disc=3)
+    assert d.per_page == 2 and d.cut_guides(0) == []
+    for i in range(7):
+        d.add(ImageItem(f"{i}.jpg"))
+    assert d.pages == 2 and len(d.slots(0)) == 6 and len(d.slots(1)) == 1 and len(d.outlines(0)) == 6
+    t = Disc(page=pg, per_disc=3, tile=True)
+    for i in range(3):
+        t.add(ImageItem(f"{i}.jpg"))
+    assert t.pages == 2 and len(t.slots(0)) == 6 and {id(i) for i, _ in t.slots(0)[:3]} == {id(t.images[0])}
+    assert preset.from_dict(preset.to_dict(t)).tile
+    with pytest.raises(ValueError):
+        Disc(hole=9999)
+
+
+def test_case_modes_use_the_panels_as_described():
+    from photosheet.core import preset
+    from photosheet.core.layouts import MM, VHS, Cassette, DiscCover, ImageItem
+    pg, land = PageExtent(595, 842), PageExtent(842, 595)
+
+    def make(cls, n, **kw):
+        c = cls(**{"page": pg, **kw})
+        for i in range(n):
+            c.add(ImageItem(f"{i}.jpg"))
+        return c
+    c = make(Cassette, 3)
+    c.page = PageExtent(320, 320)                                  # room for one, upright
+    assert abs(c.slots(0)[0][1].w / MM - 106.8) < 1e-6 and c.per_insert == 1   # spread: 104.8 mm of panels + two 1 mm gaps
+    assert sum(1 for _ in make(Cassette, 1, mode="front").slots(0)) == 1
+    two = make(Cassette, 2, mode="pair")
+    assert two.per_insert == 2 and len(two.slots(0)) == 2 and two.slots(0)[0][0] is not two.slots(0)[1][0]   # spine stays blank
+    assert make(Cassette, 3, mode="each").per_insert == 3
+    outer = make(Cassette, 1, mode="outer")
+    assert len(outer.slots(0)) == 1 and len(outer.outlines(0)[0]) == 12 and len(make(Cassette, 1).outlines(0)[0]) == 20
+    assert make(VHS, 3, mode="each", page=land).slots(0)[1][1].w == pytest.approx(25 * MM)
+    cd, dvd = make(DiscCover, 2, size="CD", mode="pair", page=land), make(DiscCover, 3, size="DVD", mode="each", page=land)
+    assert [round(r.w / MM, 1) for _, r in cd.slots(0)] == [120, 137] and len(dvd.slots(0)) == 3
+    assert abs((dvd.slots(0)[2][1].x + dvd.slots(0)[2][1].w - dvd.slots(0)[0][1].x) / MM - 275) < 1e-6   # 273 mm of panels + two 1 mm gaps
+    assert len(make(DiscCover, 1, size="CD", mode="spread", page=land).cut_guides(0)) == 6 + 16   # three folds: booklet | spine | back | spine
+    assert make(VHS, 3, mode="each").per_page == 0                          # 235 mm does not fit across portrait A4, and is never turned
+    assert VHS(page=PageExtent(100, 100)).per_page == 0 and VHS(page=PageExtent(100, 100)).pages == 1
+    each = make(Cassette, 3, mode="each", page=PageExtent(320, 320))
+    a, b = each.slots(0)[0][1], each.slots(0)[1][1]
+    assert abs(b.x - (a.x + a.w) - 1 * MM) < 1e-6                           # 1 mm between panels
+    assert len(each.cut_guides(0)) == 4 + 12 and abs(each.cut_guides(0)[0][0] - (a.x + a.w + 0.5 * MM)) < 1e-6   # a tick above and below each fold, mid-gap
+    with pytest.raises(ValueError):
+        Cassette(mode="bogus")
+    for lay in (c, outer, cd):
+        assert type(preset.from_dict(preset.to_dict(lay))) is type(lay)
+    assert preset.from_dict(preset.to_dict(cd)).size == "CD"
+
+
+def test_inserts_on_a_page_have_room_between_them():
+    from photosheet.core.layouts import MM, Cassette, ImageItem
+    c = Cassette(page=PageExtent(595, 842), mode="each")
+    for _ in range(6):
+        c.add(ImageItem("a.jpg"))
+    rects = [r for _, r in c.slots(0)]
+    assert c.per_page == 2 and rects[3].y - (rects[0].y + rects[0].h) > 10 * MM   # one insert's last panel to the next one's first

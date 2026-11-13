@@ -23,10 +23,10 @@ from PySide6.QtWidgets import (
 from .. import __version__, settings
 from ..core import preset
 from ..core.geometry import PageExtent, Rect, crop_overflow
-from ..core.layouts import (BADGE_SIZES, BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Brick, Calendar, Carousel, Checker, Collage, Diamond, Pyramid,
+from ..core.layouts import (BADGE_SIZES, BENTO, COVER_SIZES, MM, MONTHS, RECIPES, SHAPE_NAMES, Badges, Bento, Brick, Calendar, Carousel, Checker, Collage, Diamond, Pyramid,
                             Fan, Feature, Filmstrip, FixedSize, FramedPrint, Honeycomb, ImageItem, Masonry, Mosaic,
                             NUp, Package, Passport, Polaroid, Poster, Ring, Scatter, Shapes, Single, Slant, Spiral, Stairs,
-                            Strip, Timeline, Triptych, aspect, date_sort_key, snap_delta)
+                            Strip, Timeline, Triptych, Case, Cassette, Disc, DiscCover, VHS, aspect, date_sort_key, snap_delta)
 from ..core.render import Cancelled, _unit_poly, render_page, render_poster_overview, save_pages, with_locator, uncached
 
 PAGES = {"B3": (1001, 1417), "A3": (842, 1191), "Tabloid": (792, 1224), "B4": (709, 1001), "Legal": (612, 1008),
@@ -39,7 +39,7 @@ KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
          "Golden spiral": Spiral, "Honeycomb": Honeycomb, "Calendar": Calendar, "Masonry": Masonry,
          "Shapes": Shapes, "Ring": Ring, "Scatter": Scatter, "Slant": Slant, "Fan": Fan, "Brick": Brick,
          "Timeline": Timeline, "Checker": Checker, "Stairs": Stairs,
-         "Pyramid": Pyramid, "Diamond": Diamond}
+         "Pyramid": Pyramid, "Diamond": Diamond, "CD / DVD": Disc, "Disc cover": DiscCover, "Cassette": Cassette, "VHS": VHS}
 KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "carousel",
         "Fixed size": "fixed", "Passport": "passport", "Mosaic": "mosaic", "Photo strip": "strip", "Polaroid": "polaroid",
         "Triptych": "triptych", "Package": "package", "Collage": "collage", "Framed print": "framed",
@@ -47,23 +47,30 @@ KEYS = {"N-up": "nup", "Single": "single", "Poster": "poster", "Carousel": "caro
         "Golden spiral": "spiral", "Honeycomb": "honeycomb", "Calendar": "calendar", "Masonry": "masonry",
         "Shapes": "shapes", "Ring": "ring", "Scatter": "scatter", "Slant": "slant", "Fan": "fan", "Brick": "brick",
         "Timeline": "timeline", "Checker": "checker", "Stairs": "stairs",
-        "Pyramid": "pyramid", "Diamond": "diamond"}
+        "Pyramid": "pyramid", "Diamond": "diamond", "CD / DVD": "disc", "Disc cover": "cover", "Cassette": "cassette", "VHS": "vhs"}
 # The layout menu is long, so it is grouped (HIG: group related items, use progressive disclosure).
 KIND_GROUPS = (
     ("Grids", ("N-up", "Single", "Mosaic", "Masonry", "Brick", "Checker", "Pyramid", "Diamond", "Bento", "Feature")),
     ("Print sizes", ("Fixed size", "Passport", "Package", "Badges", "Photo strip", "Film strip")),
     ("Frames", ("Polaroid", "Framed print", "Triptych", "Poster")),
     ("Shapes", ("Shapes", "Honeycomb", "Ring", "Carousel", "Golden spiral")),
+    ("Media", ("CD / DVD", "Disc cover", "Cassette", "VHS")),
     ("Creative", ("Collage", "Scatter", "Fan", "Slant", "Stairs", "Timeline", "Calendar")),
 )
 assert sorted(k for _, ks in KIND_GROUPS for k in ks) == sorted(KINDS)
+CASE_MODE_LABELS = {"One photo, all panels": "spread", "Front only": "front", "One photo, front and back": "outer",
+                    "Two photos, front and back": "pair", "One photo per panel": "each"}
+# Label sizes (outer, hole) in mm. 118 mm is the usual printable edge of a 120 mm disc; 41 mm clears the stacking ring.
+DISC_PRESETS = {"CD / DVD standard (118 / 41 mm)": (118, 41), "CD / DVD full face (118 / 22 mm)": (118, 22),
+                "Mini CD 80 mm (78 / 22 mm)": (78, 22)}
 SHAPE_LABELS = {"Heart": "heart", "Star": "star", "Diamond": "diamond", "Triangle": "triangle",
                 "Rounded square": "rounded", "Circle": "circle"}
 assert set(SHAPE_LABELS.values()) == set(SHAPE_NAMES)
 HANDLE = 5   # half the size of a Collage resize handle, in px
 # The grid each layout starts with: (rows, columns). Masonry only uses the columns.
 # Layouts that start on landscape paper (every other layout starts on portrait) until the user picks an orientation.
-ORIENT_DEFAULTS = {"Brick": "Landscape"}
+ORIENT_DEFAULTS = {"Brick": "Landscape", "VHS": "Landscape", "Disc cover": "Landscape"}
+WIDE_INSERTS = ("VHS", "Disc cover")   # 235 mm and 275 mm wide: they print nothing upright on portrait paper, so picking one always goes landscape
 GRID_DEFAULTS = {"N-up": (3, 3), "Polaroid": (3, 3), "Shapes": (3, 2), "Masonry": (3, 3), "Brick": (5, 5), "Checker": (4, 4), "Pyramid": (4, 4), "Diamond": (5, 5)}
 DIRECTIONS = {"Automatic": "auto", "Vertical": "vertical", "Horizontal": "horizontal"}   # which way strips run
 SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
@@ -861,7 +868,7 @@ class MainWindow(QMainWindow):
         self.kind.setModel(model)
         self.kind.setItemDelegate(_GroupedDelegate(self.kind))
         self.kind.setCurrentText("N-up")
-        self.kind.setMaxVisibleItems(40)                      # the whole list fits: no scrolling inside a menu
+        self.kind.setMaxVisibleItems(46)                      # the whole list fits: no scrolling inside a menu
         self.page_size = QComboBox()
         for name, (w, h) in PAGES.items():   # shown with its exact size; the plain name stays as the item's data
             mm = (round(v * 25.4 / 72, None if name[0] in "AB" else 1) for v in (w, h))
@@ -953,6 +960,18 @@ class MainWindow(QMainWindow):
         self.shape_kind = QComboBox()
         self.shape_kind.addItems(SHAPE_LABELS)
         self.ring_n = self._spin(3, 36, 8)
+        self.disc_size = QComboBox()
+        self.disc_size.addItems([*DISC_PRESETS, "Custom"])
+        self.disc_size.setToolTip("Standard label sizes. After changing the diameter or hole, pick a size here to put it back.")
+        self.disc_hole = self._dspin(0, 100, 41)
+        self.disc_n = self._spin(1, 12, 1)
+        self.disc_tile = QCheckBox("Same photo in every wedge")
+        self.disc_tile.setToolTip("Repeat one photo in all wedges of a disc, instead of using a new photo for each wedge.")
+        self.case_mode = QComboBox()
+        self.case_mode.addItems(CASE_MODE_LABELS)
+        self.case_mode.setToolTip("How photos fill the panels. Panels without a photo stay blank; the spine is never filled by the two 'front and back' choices.")
+        self.cover_size = QComboBox()
+        self.cover_size.addItems(COVER_SIZES)
         self.ring_center = QCheckBox("Photo in the centre")
         self.ring_center.setChecked(True)
         self.sc_n = self._spin(1, 30, 6)
@@ -997,23 +1016,24 @@ class MainWindow(QMainWindow):
         for key, label, w in [
             ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Orientation", self.orient), ("all", "Margin (pt)", self.margin),
             ("nup,polaroid,shapes,brick,checker,pyramid,diamond", "Rows", self.rows), ("nup,polaroid,shapes,masonry,brick,checker", "Columns", self.cols),
-            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,feature,bento,spiral,honeycomb,calendar,masonry,shapes,ring,brick,checker,pyramid,diamond,slant,timeline", "Gutter (pt)", self.gutter),
+            ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,disc,cassette,vhs,cover,feature,bento,spiral,honeycomb,calendar,masonry,shapes,ring,brick,checker,pyramid,diamond,slant,timeline", "Gutter (pt)", self.gutter),
             ("nup,polaroid,framed", "Captions", self.caption),
             ("nup,fixed,passport,polaroid,package,badges,honeycomb,ring", "", self.marks),
-            ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap), ("nup,single,fixed,passport,carousel,mosaic,strip,polaroid,package,collage,framed,badges,feature,filmstrip,bento,spiral,honeycomb,calendar,masonry,shapes,ring,scatter,slant,fan,timeline,brick,checker,stairs,pyramid,diamond", "Feather (pt)", self.feather),
+            ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap), ("nup,single,fixed,passport,carousel,mosaic,strip,polaroid,package,collage,framed,badges,feature,filmstrip,bento,spiral,honeycomb,calendar,masonry,shapes,ring,scatter,slant,fan,timeline,brick,checker,stairs,pyramid,diamond,disc,cassette,vhs,cover", "Feather (pt)", self.feather),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
             ("poster", "Poster width (in)", self.poster_w), ("poster", "Poster height (in)", self.poster_h),
             ("poster", "", self.overview),
             ("fixed,passport", "Print size", self.size_preset), ("fixed,passport", "Width (mm)", self.cell_w),
             ("fixed,passport", "Height (mm)", self.cell_h), ("passport", "Copies per photo", self.copies),
-            ("fixed,passport,package,badges,honeycomb,shapes,ring,slant", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
+            ("fixed,passport,package,badges,honeycomb,shapes,ring,slant,disc,cassette,vhs,cover", "Per sheet", self.per_sheet), ("mosaic", "Row height (mm)", self.row_h),
             ("strip,filmstrip", "Frames per strip", self.frames), ("strip,filmstrip", "Strip width (mm)", self.strip_w),
             ("strip", "Strip length (mm)", self.strip_h), ("strip,filmstrip", "Direction", self.direction),
             ("polaroid", "Border (pt)", self.border), ("triptych", "Panels", self.panels),
             ("triptych", "", self.vertical), ("package", "Sheet", self.recipe),
             ("collage", "", self.snap), ("collage", "", self.arrange_btn), ("collage", "", self.collage_hint),
             ("framed", "Mat width (pt)", self.mat), ("framed", "Mat colour", self.mat_color),
-            ("badges", "Badge size", self.badge_size), ("badges", "Diameter (mm)", self.diameter), ("badges", "Pin-back margin (mm)", self.bleed), ("badges", "", self.fill_margin), ("badges", "", self.staggered),
+            ("badges", "Badge size", self.badge_size), ("disc", "Label size", self.disc_size), ("badges,disc", "Diameter (mm)", self.diameter), ("disc", "Hole (mm)", self.disc_hole), ("disc", "Photos per disc", self.disc_n), ("disc", "", self.disc_tile),
+            ("cassette,vhs,cover", "Arrangement", self.case_mode), ("cover", "Case", self.cover_size), ("badges", "Pin-back margin (mm)", self.bleed), ("badges", "", self.fill_margin), ("badges", "", self.staggered),
             ("feature", "Small photos", self.thumbs), ("feature", "", self.side), ("feature", "Hero size (%)", self.hero_share),
             ("bento", "Template", self.bento), ("spiral", "Photos per page", self.spiral_n),
             ("spiral", "Big photo share (%)", self.spiral_share), ("spiral", "", self.spiral_cw),
@@ -1033,7 +1053,7 @@ class MainWindow(QMainWindow):
             if isinstance(w, SliderSpin):
                 w.set_label(label)
             self.rowsof.setdefault(key, []).append(w)
-            if any(w is x for x in (self.size_preset, self.badge_size, self.per_sheet, self.recipe, self.arrange_btn, self.collage_hint,
+            if any(w is x for x in (self.size_preset, self.badge_size, self.disc_size, self.per_sheet, self.recipe, self.arrange_btn, self.collage_hint,
                                    self.shuffle_btn)):
                 continue  # wired separately (presets, recipe, button) or have no value to watch
             w_changed = getattr(w, "currentIndexChanged", None) or getattr(w, "toggled", None) or w.valueChanged
@@ -1043,6 +1063,10 @@ class MainWindow(QMainWindow):
         self.badge_size.activated.connect(self._pick_badge_size)
         self.diameter.valueChanged.connect(self._sync_badge_size)
         self._sync_badge_size()
+        self.disc_size.activated.connect(self._pick_disc_size)
+        self.diameter.valueChanged.connect(self._sync_disc_size)
+        self.disc_hole.valueChanged.connect(self._sync_disc_size)
+        self._sync_disc_size()
         side = self.style().pixelMetric(QStyle.PixelMetric.PM_LayoutLeftMargin)   # the style's own panel margin
         pinned.setContentsMargins(side, 6, side, 0)
         form.setContentsMargins(side, 6, side, 6)
@@ -1143,6 +1167,16 @@ class MainWindow(QMainWindow):
             self.diameter.setValue(BADGE_SIZES[i][1])
             self.bleed.setValue(BADGE_SIZES[i][2])
 
+    def _pick_disc_size(self, i):
+        if i < len(DISC_PRESETS):
+            self.diameter.setValue(list(DISC_PRESETS.values())[i][0])
+            self.disc_hole.setValue(list(DISC_PRESETS.values())[i][1])
+
+    def _sync_disc_size(self):   # show the matching standard size, or Custom
+        now = (round(self.diameter.value(), 1), round(self.disc_hole.value(), 1))
+        i = next((k for k, v in enumerate(DISC_PRESETS.values()) if v == now), len(DISC_PRESETS))
+        self.disc_size.setCurrentIndex(i)
+
     def _sync_badge_size(self):   # show the matching standard size, or Custom
         i = next((k for k, (_, mm, _) in enumerate(BADGE_SIZES) if abs(mm - self.diameter.value()) < 0.05), len(BADGE_SIZES))
         self.badge_size.setCurrentIndex(i)
@@ -1172,8 +1206,7 @@ class MainWindow(QMainWindow):
                            cut_marks=self.marks.isChecked(), crop_to_fill=self.crop.isChecked())
         # font_pt: Larger/Smaller Text save it straight to the file, so the file has the only up-to-date value
         p["view"].update(font_pt=settings.load()["view"]["font_pt"], rulers=self.rulers_act.isChecked(),
-                         ruler_units="in" if self.inches_act.isChecked() else "mm",
-                         show_all_pages=self.overview.isChecked())
+                         ruler_units="in" if self.inches_act.isChecked() else "mm")
         if self.isMaximized():   # keep the last normal size and place, so un-maximizing next time goes back there
             p["window"]["maximized"] = True
         else:
@@ -1207,7 +1240,6 @@ class MainWindow(QMainWindow):
         self.caption.setCurrentText(lay["caption"])
         self.marks.setChecked(lay["cut_marks"])
         self.crop.setChecked(lay["crop_to_fill"])
-        self.overview.setChecked(view["show_all_pages"])
         self.rulers_act.setChecked(view["rulers"])
         self.inches_act.setChecked(view["ruler_units"] == "in")
 
@@ -1246,27 +1278,24 @@ class MainWindow(QMainWindow):
         w = {}
 
         def fill(p):
-            w["kind"].setCurrentIndex(max(0, w["kind"].findData(p["layout"]["kind"])))
             w["size"].setCurrentIndex(max(0, w["size"].findData(p["page"]["size"])))
             w["orientation"].setCurrentIndex(max(0, w["orientation"].findData(p["page"]["orientation"])))
             w["margin"].setValue(p["page"]["margin"])
             w["caption"].setCurrentIndex(max(0, w["caption"].findData(p["layout"]["caption"])))
             w["cut_marks"].setChecked(p["layout"]["cut_marks"])
             w["crop_to_fill"].setChecked(p["layout"]["crop_to_fill"])
-            w["show_all_pages"].setChecked(p["view"]["show_all_pages"])
             w["rulers"].setChecked(p["view"]["rulers"])
             w["ruler_units"].setCurrentIndex(max(0, w["ruler_units"].findData(p["view"]["ruler_units"])))
             w["pdf_quality"].setCurrentIndex(max(0, w["pdf_quality"].findData(p["export"]["pdf_quality"])))
             w["file_name"].setText(p["export"]["file_name"])
 
-        w["kind"] = combo(list(KINDS), "")
         w["size"] = combo([self.page_size.itemText(i) for i in range(self.page_size.count())], "", list(PAGES))
         w["orientation"] = combo(["Automatic (layout's own)", "Portrait", "Landscape"], "", ["auto", "Portrait", "Landscape"])
         w["margin"] = self._spin(self.margin.minimum(), self.margin.maximum(), 0)
         w["margin"].setSuffix(" pt")
         w["caption"] = combo([self.caption.itemText(i) for i in range(self.caption.count())], "")
         w["cut_marks"], w["crop_to_fill"] = check(self.marks.text(), False), check(self.crop.text(), False)
-        w["show_all_pages"], w["rulers"] = check(self.overview.text(), False), check("Show rulers", False)
+        w["rulers"] = check("Show rulers", False)
         w["ruler_units"] = combo(["Millimetres", "Inches"], "", ["mm", "in"])
         w["pdf_quality"] = combo([k.capitalize() for k in PDF_PRESETS], "", list(PDF_PRESETS))
         w["file_name"] = QLineEdit(placeholderText=settings.DEFAULTS["export"]["file_name"])
@@ -1277,8 +1306,8 @@ class MainWindow(QMainWindow):
         w["file_name"].textChanged.connect(lambda t: example.setText("e.g. " + settings.file_name(
             t, self.kind.currentText(), self.page_size.currentData(), len(self.layout_.images)) + ".pdf"))
         fill(p)
-        for label, key in (("Layout", "kind"), ("Page", "size"), ("Orientation", "orientation"), ("Margin", "margin"),
-                           ("Caption", "caption"), ("", "cut_marks"), ("", "crop_to_fill"), ("", "show_all_pages"),
+        for label, key in (("Page", "size"), ("Orientation", "orientation"), ("Margin", "margin"),
+                           ("Caption", "caption"), ("", "cut_marks"), ("", "crop_to_fill"),
                            ("", "rulers"), ("Ruler units", "ruler_units"), ("PDF quality", "pdf_quality"),
                            ("File name", "file_name")):
             form.addRow(label, w[key])
@@ -1292,9 +1321,9 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         p["page"].update(size=w["size"].currentData(), orientation=w["orientation"].currentData(), margin=w["margin"].value())
-        p["layout"].update(kind=w["kind"].currentData(), caption=w["caption"].currentData(),
+        p["layout"].update(caption=w["caption"].currentData(),
                            cut_marks=w["cut_marks"].isChecked(), crop_to_fill=w["crop_to_fill"].isChecked())
-        p["view"].update(show_all_pages=w["show_all_pages"].isChecked(), rulers=w["rulers"].isChecked(),
+        p["view"].update(rulers=w["rulers"].isChecked(),
                          ruler_units=w["ruler_units"].currentData())
         p["export"].update(pdf_quality=w["pdf_quality"].currentData(),
                            file_name=w["file_name"].text().strip() or settings.DEFAULTS["export"]["file_name"])
@@ -1352,7 +1381,7 @@ class MainWindow(QMainWindow):
         k = KEYS[self.kind.currentText()]
         for key, widgets in self.rowsof.items():
             for w in widgets:
-                visible = (key == "all" or k in key.split(",")) and not (w is self.crop and k in ("badges", "slant", "carousel", "scatter", "fan"))   # these always fill their shape, or (scatter, fan) draw each photo at its own shape or a fixed card
+                visible = (key == "all" or k in key.split(",")) and not (w is self.crop and k in ("badges", "slant", "carousel", "scatter", "fan", "disc", "cassette", "vhs", "cover"))   # these always fill their shape, or (scatter, fan) draw each photo at its own shape or a fixed card
                 if w is self.per_sheet:   # a readout with nothing to say takes no room (no label with a blank value)
                     visible = visible and bool(self.per_sheet.text())
                 w.parentWidget().layout().setRowVisible(w, visible)
@@ -1372,7 +1401,7 @@ class MainWindow(QMainWindow):
         old = self.layout_
         cls = KINDS[self.kind.currentText()]
         want = ORIENT_DEFAULTS.get(self.kind.currentText(), "Portrait")
-        if self.kind.currentText() != self._last_kind and not self._orient_touched and self.orient.currentText() != want:
+        if self.kind.currentText() != self._last_kind and (not self._orient_touched or self.kind.currentText() in WIDE_INSERTS) and self.orient.currentText() != want:
             self._orient_setting = True                    # nobody chose an orientation yet: this layout's own default
             self.orient.blockSignals(True)
             self.orient.setCurrentText(want)
@@ -1392,6 +1421,10 @@ class MainWindow(QMainWindow):
             self.gutter.blockSignals(True)
             self.gutter.setValue(2)
             self.gutter.blockSignals(False)
+        if kind == "CD / DVD" and self._last_kind != "CD / DVD":            # a disc label, not a button
+            self.diameter.setValue(118)
+        elif kind == "Badges" and self._last_kind == "CD / DVD":
+            self.diameter.setValue(25)
         if kind == "Film strip" and self._last_kind != "Film strip":        # 35 mm film: 6 frames on 35 mm
             for sp, v in ((self.strip_w, 35.0), (self.frames, 6)):
                 sp.blockSignals(True)
@@ -1413,6 +1446,13 @@ class MainWindow(QMainWindow):
         m = self.margin.value()
         if not page.set_margins(m, m, m, m):
             return
+        if kind in WIDE_INSERTS and page.width < page.height and not cls(page=page).per_page:
+            wide = PageExtent(ph, pw)   # e.g. a saved Portrait: nothing would print, so lay the page on its side if that helps
+            if wide.set_margins(m, m, m, m) and cls(page=wide).per_page:
+                page = wide
+                self.orient.blockSignals(True)
+                self.orient.setCurrentText("Landscape")
+                self.orient.blockSignals(False)
         kw = {}
         if cls in (NUp, Polaroid):
             kw = dict(rows=self.rows.value(), cols=self.cols.value(),
@@ -1450,6 +1490,13 @@ class MainWindow(QMainWindow):
             kw = dict(diameter=self.diameter.value() * MM, gutter=self.gutter.value(),
                       staggered=self.staggered.isChecked(), bleed=self.bleed.value() * MM,
                       fill_margin=self.fill_margin.isChecked(), marks=self.marks.isChecked())
+        elif cls is Disc:
+            kw = dict(diameter=self.diameter.value() * MM, gutter=self.gutter.value(), hole=min(self.disc_hole.value(), self.diameter.value() - 1) * MM,
+                      per_disc=self.disc_n.value(), tile=self.disc_tile.isChecked())
+        elif cls in (Cassette, VHS, DiscCover):
+            kw = dict(gutter=self.gutter.value(), mode=CASE_MODE_LABELS[self.case_mode.currentText()])
+            if cls is DiscCover:
+                kw["size"] = self.cover_size.currentText()
         elif cls is Feature:
             kw = dict(thumbs=self.thumbs.value(), side=self.side.isChecked(),
                       hero_share=self.hero_share.value() / 100, gutter=self.gutter.value())
@@ -1527,6 +1574,12 @@ class MainWindow(QMainWindow):
             total = sum(int(n) for _, _, n in lay.prints)
             self.per_sheet.setText(f"{total} prints, all fit" if not lay.missing
                                    else f"{lay.missing} of {total} do not fit: use bigger paper")
+        elif isinstance(lay, (Disc, Cassette, VHS, DiscCover)):
+            what = "disc" if isinstance(lay, Disc) else "insert"
+            self.per_sheet.setText(f"{lay.per_page} {what}{'s' * (lay.per_page != 1)} per page" if lay.per_page
+                                   else "too big for the page: try landscape")
+            if isinstance(lay, Disc):
+                self.disc_tile.setEnabled(lay.per_disc > 1)   # a disc in one piece has no wedges to repeat the photo in
         elif isinstance(lay, Badges):
             self.per_sheet.setText(f"{lay.per_page} badges per page" if lay.per_page else "too big for the page")
         elif isinstance(lay, Shapes):
@@ -1646,6 +1699,14 @@ class MainWindow(QMainWindow):
             self.staggered.setChecked(lay.staggered)
             self.bleed.setValue(lay.bleed / MM)
             self.fill_margin.setChecked(lay.fill_margin)
+        if isinstance(lay, Disc):
+            self.disc_hole.setValue(lay.hole / MM)
+            self.disc_n.setValue(lay.per_disc)
+            self.disc_tile.setChecked(lay.tile)
+        if isinstance(lay, Case):
+            self.case_mode.setCurrentText(next(k for k, v in CASE_MODE_LABELS.items() if v == lay.mode))
+        if isinstance(lay, DiscCover):
+            self.cover_size.setCurrentText(lay.size)
         if isinstance(lay, Feature):
             self.side.setChecked(lay.side)
             self.hero_share.setValue(round(lay.hero_share * 100))
@@ -2100,7 +2161,7 @@ class MainWindow(QMainWindow):
             if row in slots:
                 cur = self.layout_.images[row]
                 ov = self._others_overlay(cur) + self._sel_overlay(cur, slots[row])
-        else:   # a few outlines painted over the finished render: no re-render
+        elif not isinstance(self.layout_, (Disc, Case)):   # discs and inserts show no selection box
             ov = [(self._shape(i, slots[i]), "pick") for i in sorted({self.list.row(it) for it in self.list.selectedItems()}) if i in slots]
         self.preview.overlay = ov
         self.preview.update()
@@ -2250,7 +2311,7 @@ class MainWindow(QMainWindow):
             return self._collage_mouse(ev)
         t, left = ev.type(), Qt.MouseButton.LeftButton
         # one tiled image / one photo in many slots / free positions: swapping makes no sense
-        swap_ok = not isinstance(self.layout_, (Poster, Passport, Triptych, Package, Collage))
+        swap_ok = not isinstance(self.layout_, (Poster, Passport, Triptych, Package, Collage, Case))
         if t == QEvent.Type.MouseButtonPress and ev.button() == left:
             hit = self._slot_at(ev.position())
             self._press, self._pan = None, None
