@@ -993,3 +993,16 @@ def test_honeycomb_half_cells_fill_the_edges_and_brick_can_drop_its_halves():
     b = Brick(page=pg)
     b.add(ImageItem("a.jpg"))
     assert Brick.auto_rotate is False
+
+
+def test_slant_zigzag_alternates_cuts_and_timeline_first_right_flips_sides():
+    from photosheet.core.layouts import PageExtent, Slant, Timeline
+    page = PageExtent(595, 842)
+    plain, zig = Slant(page=page, panels=4), Slant(page=page, panels=4, zigzag=True)
+    lean = lambda poly: poly[0][0] - poly[3][0]   # top x minus bottom x
+    assert len({round(lean(p), 3) for p in plain._polys()}) == 1
+    assert [lean(p) > 0 for p in zig._polys()] == [False, True, False, True] or [lean(p) > 0 for p in zig._polys()] == [True, False, True, False]
+    assert all(min(p[1][0] - p[0][0], p[2][0] - p[3][0]) > 0 for p in zig._polys())
+    pos = lambda lay: [c.x for _, c, _ in (setattr(lay, "images", ["a", "b"]), lay._cells(0)[0])[1]]
+    a, b = pos(Timeline(page=page)), pos(Timeline(page=page, first_right=True))
+    assert a[0] < a[1] and b[0] > b[1]   # portrait page: photo 1 left of the line by default, right with the option

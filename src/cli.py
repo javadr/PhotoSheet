@@ -74,13 +74,13 @@ def build(args) -> NUp | Single | Poster:
         lay = Scatter(page=page, photos=args.scatter_photos, size=args.scatter_size / 100, tilt=args.tilt,
                       border=args.border, seed=args.seed, spread=args.scatter_spread / 100, even=args.even)
     elif args.layout == "slant":
-        lay = Slant(page=page, panels=max(2, args.panels), slant=args.slant, gutter=args.gutter)
+        lay = Slant(page=page, panels=max(2, args.panels), slant=args.slant, gutter=args.gutter, zigzag=args.zigzag)
     elif args.layout == "fan":
         lay = Fan(page=page, photos=args.fan_photos, spread=args.spread, border=args.fan_border / 100)
     elif args.layout == "stairs":
         lay = Stairs(page=page, photos=args.stairs_photos, rising=args.rising)
     elif args.layout == "timeline":
-        lay = Timeline(page=page, photos=args.timeline_photos, dates=not args.no_dates, gutter=args.gutter)
+        lay = Timeline(page=page, photos=args.timeline_photos, dates=not args.no_dates, gutter=args.gutter, first_right=args.first_right)
     elif args.layout == "checker":
         lay = Checker(page=page, gutter=args.gutter, first_empty=args.first_empty, **({} if args.rows is None else {"rows": args.rows}),
                       **({} if args.cols is None else {"columns": args.cols}))
@@ -173,6 +173,8 @@ def main(argv=None) -> int:
     ap.add_argument("--scatter-spread", type=float, default=100, help="scatter: how much of the page the photos roam over, percent (0 = piled in the middle)")
     ap.add_argument("--even", action="store_true", help="scatter: spread the photos evenly over the whole page")
     ap.add_argument("--seed", type=int, default=1, help="scatter: random seed (same seed = same pile)")
+    ap.add_argument("--zigzag", action="store_true", help="slant: neighbouring panels lean in opposite directions")
+    ap.add_argument("--first-right", action="store_true", help="timeline: put the first photo on the right of the line")
     ap.add_argument("--slant", type=float, default=12, help="slant: lean in degrees, -40 to 40")
     ap.add_argument("--fan-photos", type=int, default=5, help="fan: cards per page")
     ap.add_argument("--spread", type=float, default=60, help="fan: angle from the first card to the last, degrees")

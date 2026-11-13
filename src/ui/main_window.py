@@ -128,12 +128,29 @@ class _NavButton(QToolButton):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(pen)
         p.translate(self.width() / 2, self.height() / 2)
+        self._glyph(p)
+
+    def _glyph(self, p):
         if self.forward:
             p.scale(-1, 1)
         x = 2.5 if self.to_end else 0   # shift the chevron right to leave room for the end bar
         p.drawPolyline(QPolygonF([QPointF(x + 2.5, -5.5), QPointF(x - 2.5, 0), QPointF(x + 2.5, 5.5)]))
         if self.to_end:
             p.drawLine(QPointF(-5.5, -5.5), QPointF(-5.5, 5.5))
+
+
+class _RotateButton(_NavButton):
+    """Like SF Symbols rectangle.portrait.rotate: a page outline with a curved arrow turning it."""
+
+    def __init__(self):
+        super().__init__(False, False)
+
+    def _glyph(self, p):
+        p.drawRoundedRect(QRectF(-6.5, -2.5, 8, 11), 1.5, 1.5)
+        arc = QPainterPath(QPointF(-3, -6.5))
+        arc.quadTo(QPointF(5, -7.5), QPointF(6.5, 0))
+        p.drawPath(arc)
+        p.drawPolyline(QPolygonF([QPointF(4.3, -1.6), QPointF(6.5, 0.4), QPointF(8.3, -1.9)]))
 
 
 class _NumberedDelegate(QStyledItemDelegate):
@@ -690,6 +707,7 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(_Ruler.T, 4, 0, 4)   # left margin keeps it centred under the page, not the vertical ruler
         self._nav_row = row
         row.setSpacing(0)   # buttons carry their own 28 pt hit area
+        row.addSpacing(40)   # balances the rotate button on the right, keeping the row centred
         row.addStretch()
         # Glyph-only buttons need a real name for screen readers and Voice Control.
         # goto() clamps, so first/last are just a far jump in either direction.
@@ -711,6 +729,18 @@ class MainWindow(QMainWindow):
                 self.page_label = QLabel(" 1 / 1 ")
                 self.page_label.setAccessibleName("Current page")
                 row.addWidget(self.page_label)
+        row.addSpacing(12)
+        self.flip_page = flip = QAction("⟲", self)
+        flip.setToolTip("Rotate Page: switch between portrait and landscape (Ctrl+R)")
+        flip.setShortcut("Ctrl+R")
+        flip.triggered.connect(lambda: self.orient.setCurrentIndex(1 - self.orient.currentIndex()))
+        self.addAction(flip)
+        flip_btn = _RotateButton()
+        flip_btn.setDefaultAction(flip)
+        flip_btn.setAccessibleName("Rotate page")
+        flip_btn.setAutoRaise(True)
+        flip_btn.setFixedSize(28, 28)
+        row.addWidget(flip_btn)
         row.addStretch()
         self._central_layout.addWidget(nav)
         e = self.menuBar().addMenu("&Edit")
@@ -803,8 +833,10 @@ class MainWindow(QMainWindow):
         self.kind.setCurrentText("N-up")
         self.kind.setMaxVisibleItems(40)                      # the whole list fits: no scrolling inside a menu
         self.page_size = QComboBox()
-        self.page_size.addItems(PAGES)
-        self.page_size.setCurrentText("A4")
+        for name, (w, h) in PAGES.items():   # shown with its exact size; the plain name stays as the item's data
+            mm = (round(v * 25.4 / 72, None if name[0] in "AB" else 1) for v in (w, h))
+            self.page_size.addItem(f"{name}  ({' × '.join(f'{v:g}' for v in mm)} mm)", name)
+        self.page_size.setCurrentIndex(self.page_size.findData("A4"))
         self.orient = QComboBox()
         self.orient.addItems(["Portrait", "Landscape"])
         self.copies = self._spin(0, 99, 0)
@@ -905,6 +937,8 @@ class MainWindow(QMainWindow):
         self.slant_panels = self._spin(2, 12, 5)
         self.slant = SliderSpin(-40, 40, 12, "°")
         self.slant.setToolTip("How far the panels lean. Negative leans left. A narrow page limits the lean.")
+        self.zigzag = QCheckBox("Alternate lean")
+        self.zigzag.setToolTip("Neighbouring panels lean in opposite directions.")
         self.fan_n = self._spin(1, 12, 5)
         self.fan_spread = SliderSpin(10, 120, 60, "°")
         self.fan_border = SliderSpin(2, 15, 6, " %")
@@ -914,6 +948,7 @@ class MainWindow(QMainWindow):
         self.st_rise.setToolTip("Start at the bottom left and step up, instead of starting at the top left and stepping down.")
         self.ck_empty = QCheckBox("First cell empty")
         self.ck_empty.setToolTip("Start the pattern on the second square instead of the first.")
+        self.tl_right = QCheckBox("First photo on the right")
         self.tl_dates = QCheckBox("Show dates")
         self.tl_dates.setChecked(True)
         self.tl_dates.setToolTip("Dates come from each photo's own data; the file name is shown for photos without one.")
@@ -959,9 +994,9 @@ class MainWindow(QMainWindow):
             ("scatter", "Photos per page", self.sc_n), ("scatter", "Photo size (%)", self.sc_size),
             ("scatter", "Tilt (°)", self.sc_tilt), ("scatter", "Spread (%)", self.sc_spread), ("scatter", "", self.sc_even), ("scatter", "Border (pt)", self.sc_border),
             ("scatter", "Random seed", self.sc_seed), ("scatter", "", self.shuffle_btn),
-            ("slant", "Panels", self.slant_panels), ("slant", "Lean", self.slant),
+            ("slant", "Panels", self.slant_panels), ("slant", "Lean", self.slant), ("slant", "", self.zigzag),
             ("fan", "Cards per page", self.fan_n), ("fan", "Spread", self.fan_spread), ("fan", "Border", self.fan_border),
-            ("timeline", "Photos per page", self.tl_n), ("timeline", "", self.tl_dates), ("checker", "", self.ck_empty), ("stairs", "Photos per page", self.st_n), ("stairs", "", self.st_rise),
+            ("timeline", "Photos per page", self.tl_n), ("timeline", "", self.tl_dates), ("timeline", "", self.tl_right), ("checker", "", self.ck_empty), ("stairs", "Photos per page", self.st_n), ("stairs", "", self.st_rise),
             ("all", "", self.crop),
         ]:
             (pinned if any(w is x for x in pinned_widgets) else form).addRow(labels.label(label), w)
@@ -1116,7 +1151,7 @@ class MainWindow(QMainWindow):
         for name, dims in PAGES.items():
             if dims == paper:
                 self.page_size.blockSignals(True)
-                self.page_size.setCurrentText(name)
+                self.page_size.setCurrentIndex(self.page_size.findData(name))
                 self.page_size.blockSignals(False)
                 self.orient.blockSignals(True)
                 self.orient.setCurrentText("Portrait")
@@ -1173,7 +1208,7 @@ class MainWindow(QMainWindow):
             self.orient.setCurrentText(want)
             self.orient.blockSignals(False)
             self._orient_setting = False
-        pw, ph = PAGES[self.page_size.currentText()]
+        pw, ph = PAGES[self.page_size.currentData()]
         if self.orient.currentText() == "Landscape":
             pw, ph = ph, pw
         page = PageExtent(pw, ph)
@@ -1270,7 +1305,8 @@ class MainWindow(QMainWindow):
             kw = dict(photos=self.sc_n.value(), size=self.sc_size.value() / 100, tilt=self.sc_tilt.value(),
                       border=self.sc_border.value(), seed=self.sc_seed.value(), spread=self.sc_spread.value() / 100, even=self.sc_even.isChecked())
         elif cls is Slant:
-            kw = dict(panels=self.slant_panels.value(), slant=self.slant.value(), gutter=self.gutter.value())
+            kw = dict(panels=self.slant_panels.value(), slant=self.slant.value(), gutter=self.gutter.value(),
+                      zigzag=self.zigzag.isChecked())
         elif cls is Fan:
             kw = dict(photos=self.fan_n.value(), spread=self.fan_spread.value(), border=self.fan_border.value() / 100)
         elif cls is Brick:
@@ -1284,7 +1320,8 @@ class MainWindow(QMainWindow):
         elif cls is Stairs:
             kw = dict(photos=self.st_n.value(), rising=self.st_rise.isChecked())
         elif cls is Timeline:
-            kw = dict(photos=self.tl_n.value(), dates=self.tl_dates.isChecked(), gutter=self.gutter.value())
+            kw = dict(photos=self.tl_n.value(), dates=self.tl_dates.isChecked(), gutter=self.gutter.value(),
+                      first_right=self.tl_right.isChecked())
         elif cls is Calendar:
             kw = dict(year=self.cal_year.value(), month=self.cal_month.currentIndex() + 1, months=self.cal_months.value(),
                       week_start=self.cal_week.currentText().lower(), photo_share=self.cal_share.value() / 100,
@@ -1345,7 +1382,7 @@ class MainWindow(QMainWindow):
         for n, (w, h) in PAGES.items():
             for orient, dims in (("Portrait", (w, h)), ("Landscape", (h, w))):
                 if dims == (lay.page.width, lay.page.height):
-                    self.page_size.setCurrentText(n)
+                    self.page_size.setCurrentIndex(self.page_size.findData(n))
                     self.orient.setCurrentText(orient)
         self.margin.setValue(int(lay.page.left))
         for attr, w in [("rows", self.rows), ("cols", self.cols), ("hgutter", self.gutter),
@@ -1393,6 +1430,7 @@ class MainWindow(QMainWindow):
         if isinstance(lay, Slant):
             self.slant_panels.setValue(lay.panels)
             self.slant.setValue(round(lay.slant))
+            self.zigzag.setChecked(lay.zigzag)
         if isinstance(lay, Fan):
             self.fan_n.setValue(lay.photos)
             self.fan_spread.setValue(round(lay.spread))
@@ -1405,6 +1443,7 @@ class MainWindow(QMainWindow):
         if isinstance(lay, Timeline):
             self.tl_n.setValue(lay.photos)
             self.tl_dates.setChecked(lay.dates)
+            self.tl_right.setChecked(lay.first_right)
         if isinstance(lay, Shapes):
             self.shape_kind.setCurrentText(next(k for k, v in SHAPE_LABELS.items() if v == lay.kind))
         if isinstance(lay, Ring):

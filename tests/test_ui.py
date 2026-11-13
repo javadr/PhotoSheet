@@ -379,7 +379,7 @@ def test_passport_layout_four_by_two_on_landscape_4x6(app, tmp_path):
     w.kind.setCurrentText("Passport")
     assert isinstance(w.layout_, Passport) and w.copies.isVisible() and w.per_sheet.isVisible()
     assert (w.margin.value(), w.gutter.value()) == (4, 4)          # switched to shop-style near-borderless
-    w.page_size.setCurrentText("4 × 6 in")
+    w.page_size.setCurrentIndex(w.page_size.findData("4 × 6 in"))
     w.orient.setCurrentText("Landscape")
     assert (w.layout_.page.width, w.layout_.page.height) == (432, 288)
     assert w.per_sheet.text() == "4 × 2 = 8 photos"
@@ -394,7 +394,7 @@ def test_passport_layout_four_by_two_on_landscape_4x6(app, tmp_path):
     w.orient.setCurrentText("Portrait")
     w.layout_ = preset.load(f)
     w._sync_controls()
-    assert (w.kind.currentText(), w.page_size.currentText(), w.orient.currentText(), w.copies.value()) == \
+    assert (w.kind.currentText(), w.page_size.currentData(), w.orient.currentText(), w.copies.value()) == \
         ("Passport", "4 × 6 in", "Landscape", 3)
     assert abs(w.cell_w.value() - 50.8) < .06 and w.size_preset.currentText() == "US passport 2 × 2 in"
 
@@ -645,11 +645,11 @@ def test_new_layouts_keep_photos_show_their_controls_and_roundtrip_presets(app, 
 def test_package_recipe_picks_the_paper_and_says_when_prints_do_not_fit(app, tmp_path):
     w = _win_with_images(tmp_path, 1)
     w.kind.setCurrentText("Package")
-    w.page_size.setCurrentText("A4")
+    w.page_size.setCurrentIndex(w.page_size.findData("A4"))
     w.recipe.setCurrentText("2 × 4×6")                           # choosing a sheet also chooses its paper
-    assert w.page_size.currentText() == "8 × 10 in" and (w.layout_.page.width, w.layout_.page.height) == (576, 720)
+    assert w.page_size.currentData() == "8 × 10 in" and (w.layout_.page.width, w.layout_.page.height) == (576, 720)
     assert w.per_sheet.text() == "2 prints, all fit" and len(w.layout_.slots(0)) == 2
-    w.page_size.setCurrentText("A5")                              # too small for two 4 x 6
+    w.page_size.setCurrentIndex(w.page_size.findData("A5"))                              # too small for two 4 x 6
     assert "do not fit" in w.per_sheet.text() and w.layout_.missing >= 1
 
 
@@ -1597,3 +1597,11 @@ def test_ctrl_arrow_nudges_further_than_shift_arrow(app, tmp_path):
     item.hpan = 0.5
     w._nudge(-1, 0, px=10)
     assert abs((item.hpan - 0.5) - 5 * small) < 1e-6
+
+
+def test_rotate_page_button_toggles_orientation(app, tmp_path):
+    w = _win_with_images(tmp_path, 1)
+    w.show()
+    before = (w.layout_.page.width, w.layout_.page.height)
+    w.flip_page.trigger()
+    assert (w.layout_.page.width, w.layout_.page.height) == before[::-1]

@@ -1529,6 +1529,7 @@ class Slant(Layout):
     panels: int = 5
     slant: float = 12.0     # degrees from vertical, -40 to 40
     gutter: float = 6.0
+    zigzag: bool = False    # neighbouring cuts lean in opposite directions
 
     def __post_init__(self):
         if not 2 <= self.panels <= 12 or not -40 <= self.slant <= 40 or self.gutter < 0:
@@ -1545,7 +1546,10 @@ class Slant(Layout):
     def _dx(self) -> float:
         """How far the panels lean across the page: at most 60% of the page width, so the panels never shrink to slivers."""
         p = self.page
-        return min(p.imageable_h * math.tan(math.radians(abs(self.slant))), 0.6 * p.imageable_w)
+        cap = 0.6 * p.imageable_w
+        if self.zigzag:   # opposite leans make panels narrower at one end: keep them wider than a sliver
+            cap = 0.5 * (p.imageable_w - (self.panels - 1) * self.gutter) / self.panels
+        return min(p.imageable_h * math.tan(math.radians(abs(self.slant))), max(cap, 0.0))
 
     @property
     def effective_slant(self) -> float:
@@ -1560,12 +1564,14 @@ class Slant(Layout):
         p, g, n = self.page, self.gutter, self.panels
         dx = self._dx()
         w = max(1.0, (p.imageable_w - dx - (n - 1) * g) / n)
-        top, bottom = (dx, 0.0) if self.slant >= 0 else (0.0, dx)   # how far each end is shifted right
+        def cut(k):   # how far the k-th cut is shifted right at the top and at the bottom
+            return (dx, 0.0) if (self.slant >= 0) == (not self.zigzag or k % 2 == 0) else (0.0, dx)
         out = []
         for i in range(n):
             x = p.left + i * (w + g)
-            out.append([(x + top, p.top), (x + top + w, p.top), (x + bottom + w, p.top + p.imageable_h),
-                        (x + bottom, p.top + p.imageable_h)])
+            (t0, b0), (t1, b1) = cut(i), cut(i + 1)
+            out.append([(x + t0, p.top), (x + t1 + w, p.top), (x + b1 + w, p.top + p.imageable_h),
+                        (x + b0, p.top + p.imageable_h)])
         return out
 
     def _chunk(self, page: int):
@@ -1703,6 +1709,7 @@ class Timeline(Layout):
     dates: bool = True
     gutter: float = 8.0
     caption_pt: float = 9.0
+    first_right: bool = False   # the first photo goes on the right (or bottom) of the line instead of the left (top)
 
     def __post_init__(self):
         if not 1 <= self.photos <= 12 or self.gutter < 0:
@@ -1733,7 +1740,7 @@ class Timeline(Layout):
         out = []
         for i, item in enumerate(chunk):
             uc = length / 2 if m < 2 else cu / 2 + i * step
-            v0 = width / 2 - 6 - g - cross if i % 2 == 0 else width / 2 + 6 + g
+            v0 = width / 2 - 6 - g - cross if (i % 2 == 0) != self.first_right else width / 2 + 6 + g
             out.append((item, box(uc - cu / 2, v0, cu, cross), uc))
         return out, box, width, length
 
@@ -1758,7 +1765,7 @@ class Timeline(Layout):
         line, dot = (150, 155, 170), (60, 100, 200)
         out = [("rect", box(min(us) - 14, mid - 1, max(us) - min(us) + 28, 2), line)]
         for i, (_, _, u) in enumerate(cells):
-            v0 = mid - 6 - g if i % 2 == 0 else mid
+            v0 = mid - 6 - g if (i % 2 == 0) != self.first_right else mid
             out.append(("rect", box(u - 0.5, v0, 1, g + 6), line))                   # the tick from the line to its photo
         out += [("ellipse", box(u - 5, mid - 5, 10, 10), dot) for u in us]
         return out
