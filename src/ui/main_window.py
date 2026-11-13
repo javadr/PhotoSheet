@@ -29,8 +29,9 @@ from ..core.layouts import (BADGE_SIZES, BENTO, MM, MONTHS, RECIPES, SHAPE_NAMES
                             Strip, Timeline, Triptych, aspect, date_sort_key, snap_delta)
 from ..core.render import Cancelled, _unit_poly, render_page, render_poster_overview, save_pages, with_locator, uncached
 
-PAGES = {"A4": (595, 842), "Letter": (612, 792), "A5": (420, 595),
-         "4 × 6 in": (288, 432), "5 × 7 in": (360, 504), "8 × 10 in": (576, 720)}   # portrait points; Orientation turns them
+PAGES = {"B3": (1001, 1417), "A3": (842, 1191), "Tabloid": (792, 1224), "B4": (709, 1001), "Legal": (612, 1008),
+         "A4": (595, 842), "Letter": (612, 792), "8 × 10 in": (576, 720), "B5": (499, 709), "A5": (420, 595),
+         "5 × 7 in": (360, 504), "A6": (298, 420), "4 × 6 in": (288, 432)}   # big to small; portrait points; Orientation turns them
 KINDS = {"N-up": NUp, "Single": Single, "Poster": Poster, "Carousel": Carousel,
          "Fixed size": FixedSize, "Passport": Passport, "Mosaic": Mosaic, "Photo strip": Strip, "Polaroid": Polaroid,
          "Triptych": Triptych, "Package": Package, "Collage": Collage, "Framed print": FramedPrint,
@@ -68,7 +69,9 @@ DIRECTIONS = {"Automatic": "auto", "Vertical": "vertical", "Horizontal": "horizo
 SIZE_PRESETS = {"Passport 35 × 45 mm": (35, 45), "US passport 2 × 2 in": (50.8, 50.8),
                 "Wallet 2.5 × 3.5 in": (63.5, 88.9), "4 × 6 in": (101.6, 152.4),
                 "5 × 7 in": (127, 177.8), "ID 30 × 40 mm": (30, 40), "China visa 33 × 48 mm": (33, 48),
-                "Canada passport 50 × 70 mm": (50, 70), "Custom": None}
+                "Canada passport 50 × 70 mm": (50, 70), "2 × 3 in": (50.8, 76.2), "3.5 × 5 in": (88.9, 127),
+                "8 × 10 in": (203.2, 254), "9 × 13 cm": (90, 130), "10 × 15 cm": (100, 150),
+                "13 × 18 cm": (130, 180), "Custom": None}
 IMG_FILTER = "Images (*.jpg *.jpeg *.png *.tif *.tiff *.bmp *.webp);;All files (*)"
 
 
@@ -721,6 +724,7 @@ class MainWindow(QMainWindow):
         self.kind.setMaxVisibleItems(40)                      # the whole list fits: no scrolling inside a menu
         self.page_size = QComboBox()
         self.page_size.addItems(PAGES)
+        self.page_size.setCurrentText("A4")
         self.orient = QComboBox()
         self.orient.addItems(["Portrait", "Landscape"])
         self.copies = self._spin(0, 99, 0)

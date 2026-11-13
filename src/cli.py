@@ -14,8 +14,9 @@ from .core.layouts import (BADGE_SIZES, BENTO, MM, RECIPES, SHAPE_NAMES, Badges,
 from .core.preset import TYPES
 from .core.render import render_all, save_pages
 
-PAGES = {"a4": (595, 842), "letter": (612, 792), "a5": (420, 595), "4x6": (288, 432), "5x7": (360, 504),
-         "8x10": (576, 720)}
+PAGES = {"b3": (1001, 1417), "a3": (842, 1191), "tabloid": (792, 1224), "b4": (709, 1001), "legal": (612, 1008),
+         "a4": (595, 842), "letter": (612, 792), "8x10": (576, 720), "b5": (499, 709), "a5": (420, 595),
+         "5x7": (360, 504), "a6": (298, 420), "4x6": (288, 432)}
 
 
 def build(args) -> NUp | Single | Poster:

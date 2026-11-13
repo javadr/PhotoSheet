@@ -89,7 +89,7 @@ photosheet-cli photos/*.jpg -o calendar.png --layout calendar --year 2027 --crop
   five headings (Grids, Print sizes, Frames, Shapes, Creative).
 - Undo and redo for adding, removing, reordering, moving and effect changes.
 - Drop image files onto the window to add them.
-- Paper sizes A4, Letter, A5, 4 × 6 in and 5 × 7 in, in portrait or landscape.
+- Paper sizes A3–A6, B3–B5, Letter, Legal, Tabloid, 4 × 6, 5 × 7 and 8 × 10 in, in portrait or landscape.
 
 **Image handling**
 
