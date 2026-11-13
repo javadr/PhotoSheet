@@ -808,6 +808,8 @@ class MainWindow(QMainWindow):
             "<p>Print many photos per sheet, with ICC colour management.</p>"
             "<p>Written by Javad Razavian<br>"
             '<a href="https://github.com/javadr/PhotoSheet">github.com/javadr/PhotoSheet</a></p>'
+            '<p>Inspired by <a href="https://www.blackfiveimaging.co.uk/">PhotoPrint</a>, with thanks and courtesy to '
+            'its author, Alastair M. Robinson.</p>'
             f'<p>Built with Python {sys.version.split()[0]} and <a href="https://www.qt.io">Qt</a> {qVersion()} '
             f"(PySide6 {PYSIDE_VERSION}).</p>")
         qt = box.addButton("About Qt", QMessageBox.ButtonRole.HelpRole)
