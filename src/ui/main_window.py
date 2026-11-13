@@ -521,6 +521,55 @@ class _PageLabel(QLabel):
         p.end()
 
 
+class _Ruler(QWidget):
+    """Page ruler along the top or left of the preview, in page mm or inches. It reads the zoom and page origin
+    from the window, so the ticks follow zoom and scrolling; the page's true size, not the monitor's."""
+    T = 20
+
+    def __init__(self, win, vertical):
+        super().__init__()
+        self.win, self.vertical, self.inches = win, vertical, False
+        self.setFixedHeight(self.T) if not vertical else self.setFixedWidth(self.T)
+
+    def paintEvent(self, _):
+        w = self.win
+        if w.preview.pixmap().isNull():
+            return
+        k = w.SCREEN_DPI * (w.zoom if w.zoom is not None else w._fit_zoom()) / 72   # px per point
+        o = self.mapFromGlobal(w.preview.mapToGlobal(w._slot_rect(Rect(0, 0, 0, 0)).topLeft().toPoint()))
+        o = o.y() if self.vertical else o.x()
+        lay = w.layout_
+        ext_pt = (lay.poster_h if self.vertical else lay.poster_w) if w._overview() else (lay.page.height if self.vertical else lay.page.width)
+        pt = 72 if self.inches else MM                      # points per unit
+        px = pt * k                                         # px per unit
+        steps = [1 / 16, 1 / 8, 1 / 4, 1 / 2, 1, 2, 5, 10, 20, 50, 100] if self.inches else [1, 2, 5, 10, 20, 50, 100, 200, 500]
+        minor = next((s for s in steps if s * px >= 6), steps[-1])
+        major = next((s for s in steps if s * px >= 50), steps[-1])
+        ext = ext_pt / pt
+        p = QPainter(self)
+        fg = self.palette().color(QPalette.ColorRole.WindowText)
+        p.fillRect(self.rect(), self.palette().color(QPalette.ColorRole.Window))
+        p.setPen(fg)
+        p.setFont(QFont(QApplication.font().family(), 7))
+        if self.vertical:
+            p.translate(self.T, 0); p.rotate(90)             # draw along x (down the screen); y runs left from the right edge
+        def at(v, size):
+            x = o + v * px
+            if self.vertical:
+                p.drawLine(round(x), 0, round(x), size)
+            else:
+                p.drawLine(round(x), self.T, round(x), self.T - size)
+        for i in range(int(ext / minor) + 1):
+            at(i * minor, 4)
+        for i in range(int(ext / major) + 1):
+            v = i * major
+            at(v, 9)
+            lab = f"{v:g}"
+            x = round(o + v * px) + 3
+            p.drawText(x, 10, lab)
+        p.end()
+
+
 class MainWindow(QMainWindow):
     SCREEN_DPI = 96   # 100% zoom
     FIT_PAD = 40      # px of desk around the paper in fit mode
@@ -559,7 +608,21 @@ class MainWindow(QMainWindow):
         self._central_layout = QVBoxLayout(central)
         self._central_layout.setContentsMargins(0, 0, 0, 0)
         self._central_layout.setSpacing(0)
-        self._central_layout.addWidget(self.scroll, 1)   # the page navigation row is added below it in _build_menu
+        self.hruler, self.vruler = _Ruler(self, False), _Ruler(self, True)
+        ruled = QWidget()
+        grid = QGridLayout(ruled)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(0)
+        self.unit_lbl = QLabel("mm", alignment=Qt.AlignmentFlag.AlignCenter)   # the corner square names the unit
+        self.unit_lbl.setFixedSize(_Ruler.T, _Ruler.T)
+        self.unit_lbl.setFont(QFont(QApplication.font().family(), 7))
+        grid.addWidget(self.unit_lbl, 0, 0)
+        grid.addWidget(self.hruler, 0, 1)
+        grid.addWidget(self.vruler, 1, 0)
+        grid.addWidget(self.scroll, 1, 1)
+        for bar in (self.scroll.horizontalScrollBar(), self.scroll.verticalScrollBar()):
+            bar.valueChanged.connect(self._update_rulers)
+        self._central_layout.addWidget(ruled, 1)   # the page navigation row is added below it in _build_menu
         self.setCentralWidget(central)
         self.setAcceptDrops(True)
         self._build_layout_dock()
@@ -621,7 +684,8 @@ class MainWindow(QMainWindow):
         nav = QWidget()
         self._nav_btns = []
         row = QHBoxLayout(nav)
-        row.setContentsMargins(0, 4, 0, 4)
+        row.setContentsMargins(_Ruler.T, 4, 0, 4)   # left margin keeps it centred under the page, not the vertical ruler
+        self._nav_row = row
         row.setSpacing(0)   # buttons carry their own 28 pt hit area
         row.addStretch()
         # Glyph-only buttons need a real name for screen readers and Voice Control.
@@ -675,6 +739,19 @@ class MainWindow(QMainWindow):
         v = self.menuBar().addMenu("&View")
         v.addAction(self.layout_dock.toggleViewAction())
         v.addAction(self.image_dock.toggleViewAction())
+        v.addSeparator()
+        def rulers_on(on):
+            for r in (self.hruler, self.vruler):
+                r.setVisible(on)
+            self.unit_lbl.setVisible(on)
+            self._nav_row.setContentsMargins(_Ruler.T if on else 0, 4, 0, 4)
+        def rulers_in(on):
+            self.hruler.inches = self.vruler.inches = on
+            self.unit_lbl.setText("in" if on else "mm")
+            self._update_rulers()
+        act(v, "Rulers", rulers_on).setCheckable(True)
+        v.actions()[-1].setChecked(True)
+        act(v, "Rulers in Inches", rulers_in).setCheckable(True)
         v.addSeparator()
         act(v, "Fit to Window", lambda: self.set_zoom(None), "Ctrl+0")
         act(v, "Actual Size", lambda: self.set_zoom(1.0), "Ctrl+1")
@@ -1793,8 +1870,13 @@ class MainWindow(QMainWindow):
     def _overview(self) -> bool:
         return isinstance(self.layout_, Poster) and self.overview.isChecked()
 
+    def _update_rulers(self, *_):
+        self.hruler.update()
+        self.vruler.update()
+
     def _refresh_overlay(self):
         """Outline every selected photo; the current Collage photo also gets resize handles."""
+        self._update_rulers()
         if self._cl or self._stale or self._overview():
             self.preview.overlay = [] if self._overview() else self.preview.overlay
             return
