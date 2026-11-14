@@ -891,7 +891,7 @@ def test_timeline_alternates_sides_keeps_order_and_captions_with_dates(tmp_path)
     assert _rects_disjoint(left) and _rects_disjoint(right)                            # same-side photos never overlap
     caps = t.captions(0)
     assert [c[0] for c in caps][:2] == ["10 Jan 2024", "11 Feb 2024"]                  # dates from the photos
-    for (text, band), (_, r) in zip(caps, t.slots(0)):
+    for (text, band, *_), (_, r) in zip(caps, t.slots(0)):
         assert band.y >= r.y + r.h - 1e-6 and band.x == r.x                            # each caption sits under its photo
     shapes = t.shapes(0)
     assert sum(1 for k, _, _ in shapes if k == "ellipse") == 6                         # one dot per photo
@@ -1079,3 +1079,16 @@ def test_inserts_on_a_page_have_room_between_them():
         c.add(ImageItem("a.jpg"))
     rects = [r for _, r in c.slots(0)]
     assert c.per_page == 2 and rects[3].y - (rects[0].y + rects[0].h) > 10 * MM   # one insert's last panel to the next one's first
+
+
+def test_custom_captions():
+    from photosheet.core.layouts import Polaroid, Timeline
+    imgs = [ImageItem(path=f"/x/{n}.jpg") for n in "abc"]
+    for cls in (NUp, Polaroid):
+        lay = cls(rows=1, cols=3, caption="custom", texts=["one", "", "three"])
+        lay.images = list(imgs)
+        assert [t for t, _ in lay.captions(0)] == ["one", "", "three"]
+    tl = Timeline(texts=["Paris"])
+    tl.images = list(imgs)
+    caps = [c[0] for c in tl.captions(0)]
+    assert caps[0] == "Paris" and caps[1] != "Paris"

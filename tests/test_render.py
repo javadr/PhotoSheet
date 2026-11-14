@@ -609,7 +609,7 @@ def test_brick_and_timeline_render(tmp_path, red):
         t.add(ImageItem(p, rotation=0))
     out = render_page(t, 0, dpi=100)
     k = 100 / 72
-    for (_, r), (text, band) in zip(t.slots(0), t.captions(0)):
+    for (_, r), (text, band, *_) in zip(t.slots(0), t.captions(0)):
         assert min(out.getpixel((int((r.x + r.w / 2) * k), int((r.y + r.h / 2) * k)))[:1]) >= 245     # the (red) photo; JPEG is not exact
         ink = out.crop((int(band.x * k), int(band.y * k), int((band.x + band.w) * k), int((band.y + band.h) * k))).getextrema()
         assert ink[0][0] < 140 and ink[1][0] < 140                                       # dark date text in the caption band

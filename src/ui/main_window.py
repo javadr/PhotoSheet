@@ -558,16 +558,75 @@ class _GroupLabel(QLabel):
         return QSize(max(s.width(), self._group.width()), s.height())
 
 
+def _glyph(kind: str, color) -> QIcon:
+    """Small vector icon in the given colour, so it follows light and dark: "up" / "down" chevrons, a "grip" of dots."""
+    from PySide6.QtGui import QPixmap
+    pm = QPixmap(48, 48)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    if kind == "grip":
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(color)
+        for x in (18, 30):
+            for y in (12, 24, 36):
+                p.drawEllipse(QPointF(x, y), 3, 3)
+    else:
+        p.setPen(QPen(color, 4.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        y0, y1 = (30, 18) if kind == "up" else (18, 30)
+        p.drawPolyline([QPointF(13, y0), QPointF(24, y1), QPointF(35, y0)])
+    p.end()
+    return QIcon(pm)
+
+
+class _Grip(QLabel):
+    """Drag handle of a caption row: press and drag up or down; on_drag gets the pointer's screen y."""
+
+    def __init__(self, icon: QIcon, on_press, on_drag):
+        super().__init__(toolTip="Drag to reorder", cursor=Qt.CursorShape.SizeVerCursor)
+        self.setPixmap(icon.pixmap(16, 16))
+        self.setFixedSize(20, 28)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setAccessibleName("Drag to reorder")
+        self._press, self._drag = on_press, on_drag
+
+    def mousePressEvent(self, e):
+        self._press(self)
+
+    def mouseMoveEvent(self, e):
+        if e.buttons() & Qt.MouseButton.LeftButton:
+            self._drag(e.globalPosition().y())
+
+
 class _PageLabel(QLabel):
     """Page preview that paints drag-and-drop feedback over the rendered page."""
 
     def __init__(self):
         super().__init__(alignment=Qt.AlignmentFlag.AlignCenter)
         self.overlay: list[tuple[QRectF | QPolygonF, str]] = []   # ("src" dims the picked photo, "dst" outlines the target)
+        self.numbers: list[tuple[QRectF, int]] = []   # photo number badges, drawn over each slot (caption editing)
         self.setMouseTracking(True)
+
+    def _paint_numbers(self):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        for r, n in self.numbers:
+            d = max(18.0, min(r.width(), r.height()) / 4)
+            c = QRectF(r.left() + 4, r.top() + 4, d, d)   # top left corner of the photo
+            p.setPen(QPen(QColor(255, 255, 255), 2))
+            p.setBrush(QColor(0, 0, 0, 170))
+            p.drawEllipse(c)
+            f = p.font()
+            f.setPixelSize(int(d * 0.5))
+            f.setBold(True)
+            p.setFont(f)
+            p.drawText(c, Qt.AlignmentFlag.AlignCenter, str(n))
+        p.end()
 
     def paintEvent(self, e):
         super().paintEvent(e)
+        if self.numbers:
+            self._paint_numbers()
         if not self.overlay:
             return
         p = QPainter(self)
@@ -945,7 +1004,11 @@ class MainWindow(QMainWindow):
         self.row_h = self._dspin(10, 300, 50)
         self.size_preset.currentIndexChanged.connect(self._apply_size_preset)
         self.caption = QComboBox()
-        self.caption.addItems(["None", "Filename", "Number", "Both"])
+        self.caption.addItems(["None", "Filename", "Number", "Both", "Custom"])
+        self.cap_texts: list[str] = []   # the custom captions, by photo number - 1
+        self.caption.activated.connect(lambda _: self.caption.currentText() == "Custom" and self._edit_captions())
+        self.cap_btn = QPushButton("Edit captions…")
+        self.cap_btn.clicked.connect(self._edit_captions)
         self.marks = QCheckBox("Cut marks")
         self.frames = self._spin(1, 12, 4)
         self.border = self._spin(2, 60, 10)
@@ -1062,7 +1125,7 @@ class MainWindow(QMainWindow):
             ("all", "Layout", self.kind), ("all", "Page", self.page_size), ("all", "Orientation", self.orient), ("all", "Margin (pt)", self.margin),
             ("nup,polaroid,shapes,brick,checker,pyramid,diamond", "Rows", self.rows), ("nup,polaroid,shapes,masonry,brick,checker", "Columns", self.cols),
             ("nup,fixed,passport,mosaic,strip,polaroid,triptych,package,badges,disc,cassette,vhs,cover,feature,bento,spiral,honeycomb,calendar,masonry,shapes,ring,brick,checker,pyramid,diamond,slant,timeline", "Gutter (pt)", self.gutter),
-            ("nup,polaroid,framed", "Captions", self.caption),
+            ("nup,polaroid,framed", "Captions", self.caption), ("nup,polaroid,framed,timeline", "", self.cap_btn),
             ("nup,fixed,passport,polaroid,package,badges,honeycomb,ring", "", self.marks),
             ("carousel", "Segments", self.segments), ("carousel", "Overlap (°)", self.overlap), ("nup,single,fixed,passport,carousel,mosaic,strip,polaroid,package,collage,framed,badges,feature,filmstrip,bento,spiral,honeycomb,calendar,masonry,shapes,ring,scatter,slant,fan,timeline,brick,checker,stairs,pyramid,diamond,disc,cassette,vhs,cover", "Feather (pt)", self.feather),
             ("carousel", "Angle offset (°)", self.angle), ("carousel", "Inner radius (pt)", self.inner),
@@ -1584,7 +1647,7 @@ class MainWindow(QMainWindow):
             kw = dict(year=self.cal_year.value(), month=self.cal_month.currentIndex() + 1, months=self.cal_months.value(),
                       week_start=self.cal_week.currentText().lower(), photo_share=self.cal_share.value() / 100,
                       gutter=self.gutter.value())
-        self.layout_ = cls(page=page, feather=self.feather.value() if cls not in (Poster, Triptych) else 0, **kw)
+        self.layout_ = cls(page=page, texts=list(self.cap_texts), feather=self.feather.value() if cls not in (Poster, Triptych) else 0, **kw)
         for it in old.images:
             it.crop = self.crop.isChecked()
             self.layout_.add(it)
@@ -1603,6 +1666,113 @@ class MainWindow(QMainWindow):
             self.segments.blockSignals(True)
             self.segments.setValue(n)
             self.segments.blockSignals(False)
+
+    def _edit_captions(self):
+        """Let the user type a caption for each photo on the page in the preview. Modal: the main window waits."""
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+        from ..core.layouts import date_text
+        lay = self.layout_
+        start = self.page_no * getattr(lay, "per_page", 1)
+        items = [it for it, _ in lay.slots(self.page_no)]
+        if not items:
+            QMessageBox.information(self, "Captions", "Add photos first: there is nothing on this page to caption.")
+            return
+        # No parent: some desktops attach a modal dialog to its parent and then drag the whole app along with it.
+        dlg = QDialog(None, windowTitle="Captions", windowIcon=self.windowIcon())
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)   # still blocks the main window
+        ink = dlg.palette().color(QPalette.ColorRole.Text)
+        ink.setAlpha(170)
+        up, down, grip = _glyph("up", ink), _glyph("down", ink), _glyph("grip", ink)
+        hint = QLabel("Type a caption for each photo. The numbers match the badges on the page. "
+                      "Drag a row's handle, or use the arrows, to move a caption.", wordWrap=True)
+        pal = hint.palette()   # secondary text, but readable (the disabled colour is too faint)
+        ink2 = pal.color(QPalette.ColorRole.WindowText)
+        ink2.setAlpha(190)
+        pal.setColor(QPalette.ColorRole.WindowText, ink2)
+        hint.setPalette(pal)
+        body, rows, edits = QWidget(), QVBoxLayout(), []
+        body.setLayout(rows)
+        rows.setSpacing(6)
+        rows.setContentsMargins(0, 0, 4, 0)
+
+        def put(texts):
+            for e, t in zip(edits, texts):
+                e.setText(t)
+
+        def move(i, j):   # the caption at row i goes to row j, the ones between shift; rows keep their photo's number
+            if 0 <= j < len(edits) and i != j:
+                texts = [e.text() for e in edits]
+                texts.insert(j, texts.pop(i))
+                put(texts)
+                edits[j].setFocus()
+        held = [0]   # row being dragged
+
+        def drag(y):
+            for j, e in enumerate(edits):
+                top = e.mapToGlobal(QPointF(0, 0).toPoint()).y()
+                if top - 3 <= y < top + e.height() + 3 and j != held[0]:
+                    move(held[0], j)
+                    held[0] = j
+                    break
+
+        for i, it in enumerate(items):
+            e = QLineEdit(self.cap_texts[start + i] if start + i < len(self.cap_texts) else "", clearButtonEnabled=True)
+            e.setMinimumHeight(28)
+            if isinstance(lay, Timeline):
+                e.setPlaceholderText(date_text(it))
+                pal = e.palette()   # light text, like the hint in any form field: it is the default, not a value
+                c = pal.color(QPalette.ColorRole.Text)
+                c.setAlpha(110)
+                pal.setColor(QPalette.ColorRole.PlaceholderText, c)
+                e.setPalette(pal)
+            e.setToolTip(os.path.basename(it.path))   # the file name, only on hover: the number is what matters
+            e.setAccessibleName(f"Caption for photo {start + i + 1}")
+            badge = QLabel(str(start + i + 1), alignment=Qt.AlignmentFlag.AlignCenter)
+            badge.setFixedSize(30, 22)
+            badge.setStyleSheet("background: palette(midlight); border-radius: 11px; font-weight: 600;")
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            row.addWidget(_Grip(grip, lambda g, i=i: held.__setitem__(0, i), drag))
+            row.addWidget(badge)
+            row.addWidget(e, 1)
+            arrows = QVBoxLayout()   # one stacked up/down control, like a stepper
+            arrows.setSpacing(0)
+            row.addLayout(arrows)
+            for icon, step, tip in ((up, -1, "Move up"), (down, 1, "Move down")):
+                btn = QToolButton(toolTip=tip, autoRaise=True, icon=icon, iconSize=QSize(14, 14))
+                btn.setFixedSize(24, 14)   # the stack is 24 x 28 pt; each half is a full-width target
+                btn.setAccessibleName(f"{tip}: photo {start + i + 1}")
+                btn.setEnabled(0 <= i + step < len(items))   # the first caption can't go up, the last can't go down
+                btn.clicked.connect(lambda _=False, i=i, d=step: move(i, i + d))
+                arrows.addWidget(btn)
+            rows.addLayout(row)
+            edits.append(e)
+        scroll = QScrollArea(widgetResizable=True, frameShape=QFrame.Shape.NoFrame)
+        scroll.setWidget(body)
+        scroll.setMinimumHeight(min(len(items) * 34 + 8, 420))
+        scroll.setMinimumWidth(560)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Apply")
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        outer = QVBoxLayout(dlg)
+        outer.setSpacing(12)
+        outer.addWidget(hint)
+        outer.addWidget(scroll, 1)
+        outer.addWidget(buttons)
+        edits[0].setFocus()
+        self.preview.numbers = [(self._slot_rect(r), i + 1) for i, r in self._slots_now()]   # which photo is which
+        self.preview.update()
+        dlg.adjustSize()
+        dlg.move(self.geometry().right() - dlg.width() - 20, self.geometry().top() + 80)   # beside the page, not over it
+        ok = dlg.exec() == QDialog.DialogCode.Accepted
+        self.preview.numbers = []
+        self.preview.update()
+        if not ok:
+            return
+        self.cap_texts += [""] * (start + len(edits) - len(self.cap_texts))
+        self.cap_texts[start:start + len(edits)] = [e.text() for e in edits]
+        self._layout_changed()
 
     def _shuffle(self):
         self.sc_seed.setValue(random.randint(0, 9999))   # fires _layout_changed through the spin box
@@ -1753,6 +1923,7 @@ class MainWindow(QMainWindow):
             self.hero_share.setValue(round(lay.hero_share * 100))
         if hasattr(lay, "caption"):
             self.caption.setCurrentText(lay.caption.capitalize())
+        self.cap_texts = list(lay.texts)
         self.marks.setChecked(lay.marks)
         self._loading = False
         self._show_kind_rows()

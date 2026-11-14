@@ -55,6 +55,7 @@ class Layout:
     page: PageExtent = field(default_factory=PageExtent)
     images: list[ImageItem] = field(default_factory=list)
     marks: bool = False   # draw crop marks at each photo's corners (layouts that support it)
+    texts: list = field(default_factory=list, kw_only=True)   # custom captions (caption "custom"), by photo number - 1
     feather: float = field(default=0.0, kw_only=True)   # points of soft fade at each photo's edge, so overlaps blend
 
     def add(self, item: ImageItem) -> None:
@@ -74,6 +75,12 @@ class Layout:
     def captions(self, page: int) -> list[tuple[str, Rect]]:
         """(text, band) pairs drawn over the page, in points."""
         return []
+
+    def caption_text(self, mode: str, n: int, name: str) -> str:
+        """Caption of photo number n (1-based) for a caption mode."""
+        if mode == "custom":
+            return self.texts[n - 1] if n <= len(self.texts) else ""
+        return {"filename": name, "number": str(n), "both": f"{n}  {name}"}[mode]
 
     def cards(self, page: int) -> list[Rect]:
         """White cards drawn under the photos (Polaroid), in points."""
@@ -109,7 +116,7 @@ class NUp(Layout):
     def __post_init__(self):
         if self.rows < 1 or self.cols < 1:
             raise ValueError("rows and cols must be >= 1")
-        if self.caption not in ("none", "filename", "number", "both"):
+        if self.caption not in ("none", "filename", "number", "both", "custom"):
             raise ValueError(f"unknown caption mode {self.caption!r}")
 
     @property
@@ -144,7 +151,7 @@ class NUp(Layout):
         start, out = page * self.per_page, []
         for i, img in enumerate(self.images[start:start + self.per_page]):
             c, n, name = self.cell(*divmod(i, self.cols)), start + i + 1, os.path.basename(img.path)
-            text = {"filename": name, "number": str(n), "both": f"{n}  {name}"}[self.caption]
+            text = self.caption_text(self.caption, n, name)
             out.append((text, Rect(c.x, c.y + c.h - self._band, c.w, self._band)))
         return out
 
@@ -530,7 +537,7 @@ class Polaroid(NUp):
         for i, img in enumerate(self.images[start:start + self.per_page]):
             card = self._card(*divmod(i, self.cols))
             n, name = start + i + 1, os.path.basename(img.path)
-            text = {"filename": name, "number": str(n), "both": f"{n}  {name}"}[self.caption]
+            text = self.caption_text(self.caption, n, name)
             edge = self.border * self.bottom_ratio
             h = min(edge, self.caption_pt * 1.8)
             out.append((text, Rect(card.x + self.border, card.y + card.h - edge + (edge - h) / 2,
@@ -810,7 +817,7 @@ class FramedPrint(Layout):
             raise ValueError("mat must be >= 0")
         if self.color not in MAT_COLORS:
             raise ValueError(f"unknown mat colour {self.color!r}")
-        if self.caption not in ("none", "filename", "number", "both"):
+        if self.caption not in ("none", "filename", "number", "both", "custom"):
             raise ValueError(f"unknown caption mode {self.caption!r}")
 
     @property
@@ -853,7 +860,7 @@ class FramedPrint(Layout):
             return []
         c, n = self._card(), page + 1
         name = os.path.basename(self.images[page].path)
-        text = {"filename": name, "number": str(n), "both": f"{n}  {name}"}[self.caption]
+        text = self.caption_text(self.caption, n, name)
         return [(text, Rect(c.x + self.mat, c.y + c.h - self.mat - self.caption_pt * 2.1, c.w - 2 * self.mat,
                             self.caption_pt * 1.8))]
 
@@ -1758,7 +1765,12 @@ class Timeline(Layout):
     def captions(self, page: int):
         if not self.dates:
             return []
-        return [(date_text(item), Rect(c.x, c.y + c.h - self._band, c.w, self._band)) for item, c, _ in self._cells(page)[0]]
+        out = []
+        for i, (item, c, _) in enumerate(self._cells(page)[0]):
+            n, band = page * self.photos + i, Rect(c.x, c.y + c.h - self._band, c.w, self._band)
+            custom = self.texts[n].strip() if n < len(self.texts) else ""   # a custom text wins over the date
+            out.append((custom or date_text(item), band))
+        return out
 
     def shapes(self, page: int):
         cells, box, width, length = self._cells(page)
