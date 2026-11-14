@@ -821,7 +821,7 @@ class MainWindow(QMainWindow):
         act(m, "Export PDF/PNG…", self.export, "Ctrl+E")
         act(m, "Print…", self.print_, "Ctrl+P")
         m.addSeparator()
-        act(m, "Preferences…", self.preferences, QKeySequence.StandardKey.Preferences).setMenuRole(QAction.MenuRole.PreferencesRole)
+        act(m, "Preferences…", self.preferences, QKeySequence("Ctrl+,")).setMenuRole(QAction.MenuRole.PreferencesRole)
         m.addSeparator()
         act(m, "Quit", self.close, "Ctrl+Q")
         # Page navigation: a row centred directly under the page preview.
@@ -1404,8 +1404,9 @@ class MainWindow(QMainWindow):
         w["ruler_units"] = combo(["Millimetres", "Inches"], "", ["mm", "in"])
         w["pdf_quality"] = combo([k.capitalize() for k in PDF_PRESETS], "", list(PDF_PRESETS))
         w["file_name"] = QLineEdit(placeholderText=settings.DEFAULTS["export"]["file_name"])
-        w["file_name"].setToolTip("Name suggested when you export or save a preset. Fields: "
-                                  + ", ".join(f"{{{k}}} ({v})" for k, v in settings.NAME_FIELDS.items()))
+        # rich text so Qt wraps it; one field per line
+        w["file_name"].setToolTip("Name suggested when you export or save a preset.<br>Fields:<br>"
+                                  + "<br>".join(f"&nbsp;&nbsp;{{{k}}} ({v})" for k, v in settings.NAME_FIELDS.items()))
         example = QLabel()
         example.setEnabled(False)   # secondary text colour
         w["file_name"].textChanged.connect(lambda t: example.setText("e.g. " + settings.file_name(
