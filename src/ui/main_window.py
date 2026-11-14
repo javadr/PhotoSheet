@@ -135,84 +135,6 @@ def dropped_images(mime) -> list[str]:
             if u.isLocalFile() and u.toLocalFile().lower().endswith(tuple(IMG_SUFFIXES))]
 
 
-class _NavButton(QToolButton):
-    """Vector page-navigation glyph (like SF Symbols chevron.left / chevron.left.to.line), mirrored for next/last.
-    Drawn in the palette's text colour so it follows light/dark and dims when disabled."""
-
-    def __init__(self, to_end: bool, forward: bool):
-        super().__init__()
-        self.to_end, self.forward = to_end, forward
-
-    def paintEvent(self, ev):
-        p = QStylePainter(self)
-        opt = QStyleOptionToolButton()
-        self.initStyleOption(opt)
-        opt.text, opt.icon = "", QIcon()   # the style draws only the hover/pressed plate; the glyph is ours
-        p.drawComplexControl(QStyle.ComplexControl.CC_ToolButton, opt)
-        grp = QPalette.ColorGroup.Normal if self.isEnabled() else QPalette.ColorGroup.Disabled
-        pen = QPen(self.palette().color(grp, QPalette.ColorRole.ButtonText), 1.8)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setPen(pen)
-        p.translate(self.width() / 2, self.height() / 2)
-        self._glyph(p)
-
-    def _glyph(self, p):
-        if self.forward:
-            p.scale(-1, 1)
-        x = 2.5 if self.to_end else 0   # shift the chevron right to leave room for the end bar
-        p.drawPolyline(QPolygonF([QPointF(x + 2.5, -5.5), QPointF(x - 2.5, 0), QPointF(x + 2.5, 5.5)]))
-        if self.to_end:
-            p.drawLine(QPointF(-5.5, -5.5), QPointF(-5.5, 5.5))
-
-
-class _RotateButton(_NavButton):
-    """Like SF Symbols rectangle.portrait.rotate: a page outline with a curved arrow turning it."""
-
-    def __init__(self):
-        super().__init__(False, False)
-
-    def _glyph(self, p):
-        p.drawRoundedRect(QRectF(-6.5, -2.5, 8, 11), 1.5, 1.5)
-        arc = QPainterPath(QPointF(-3, -6.5))
-        arc.quadTo(QPointF(5, -7.5), QPointF(6.5, 0))
-        p.drawPath(arc)
-        p.drawPolyline(QPolygonF([QPointF(4.3, -1.6), QPointF(6.5, 0.4), QPointF(8.3, -1.9)]))
-
-
-class _ZoomButton(_NavButton):
-    """Zoom glyphs in the page buttons' 1.8 pt stroke: SF Symbols' magnifyingglass.plus / .minus for zoom, a
-    "1:1" for actual size and a viewfinder (four corner brackets) for fit to window."""
-
-    def __init__(self, kind: str):
-        super().__init__(False, False)
-        self.kind = kind   # "in" | "out" | "actual" | "fit"
-
-    def _glyph(self, p):
-        if self.kind == "fit":   # a page frame with brackets at its corners
-            for sx in (-1, 1):
-                for sy in (-1, 1):
-                    p.drawPolyline(QPolygonF([QPointF(sx * 6, sy * 2.2), QPointF(sx * 6, sy * 5.5), QPointF(sx * 2.8, sy * 5.5)]))
-        elif self.kind == "actual":   # "1:1" drawn with strokes, so it weighs the same as the other glyphs
-            for x in (-6.5, 6.5):
-                p.drawPolyline(QPolygonF([QPointF(x - 2, -3), QPointF(x, -5), QPointF(x, 5)]))
-            p.drawLine(QPointF(0, -3), QPointF(0, -2.4))   # a short stroke with round caps is a dot
-            p.drawLine(QPointF(0, 2.4), QPointF(0, 3))
-        else:   # SF Symbols' magnifyingglass: a big lens, a heavier handle, a lighter sign inside
-            p.translate(-1.8, -1.8)
-            pen = p.pen()
-            pen.setWidthF(1.6)
-            p.setPen(pen)
-            p.drawEllipse(QPointF(0, 0), 6.2, 6.2)
-            p.drawLine(QPointF(-3, 0), QPointF(3, 0))
-            if self.kind == "in":
-                p.drawLine(QPointF(0, -3), QPointF(0, 3))
-            pen.setWidthF(2.4)
-            p.setPen(pen)
-            p.drawLine(QPointF(4.9, 4.9), QPointF(9.2, 9.2))
-
-
 class _NumberedDelegate(QStyledItemDelegate):
     """Shows each row's position before its file name; the item text itself stays the bare file name."""
     def initStyleOption(self, option, index):
@@ -579,6 +501,25 @@ def _glyph(kind: str, color) -> QIcon:
     return QIcon(pm)
 
 
+def _icon_button() -> QToolButton:
+    """Flat button under the preview; its glyph is the action's tinted icon (the style greys it when disabled)."""
+    btn = QToolButton()
+    btn.setIconSize(QSize(16, 16))
+    return btn
+
+
+def _menu_icon(name: str, color) -> QIcon:
+    """Lucide SVG (src/icons) tinted to `color`, so it follows light and dark."""
+    from PySide6.QtSvg import QSvgRenderer
+    svg = open(os.path.join(os.path.dirname(os.path.dirname(__file__)), "icons", f"{name}.svg")).read().replace("currentColor", color.name())
+    pm = QPixmap(48, 48)   # 2x for HiDPI; Qt scales it down to the menu's icon size
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    QSvgRenderer(svg.encode()).render(p)
+    p.end()
+    return QIcon(pm)
+
+
 class _Grip(QLabel):
     """Drag handle of a caption row: press and drag up or down; on_drag gets the pointer's screen y."""
 
@@ -767,6 +708,7 @@ class MainWindow(QMainWindow):
         self._build_layout_dock()
         self._build_image_dock()
         self._build_menu()
+        self._tint_menu_icons()
         self.busy = QFrame(self.scroll.viewport())   # floating status over the top of the preview while photos load
         self.busy.setObjectName("busy")
         self.busy.setMinimumWidth(260)
@@ -806,24 +748,28 @@ class MainWindow(QMainWindow):
 
     # ---- construction ----
     def _build_menu(self):
-        def act(menu, text, fn, key=None):
+        self._menu_icons = []   # (action, icon name), re-tinted on a light/dark switch
+
+        def act(menu, text, fn, key=None, icon=None):
             a = QAction(text, self)
+            if icon:
+                self._menu_icons.append((a, icon))
             a.triggered.connect(fn)
             if key:
                 a.setShortcut(key)
             menu.addAction(a)
             return a
         m = self.menuBar().addMenu("&File")
-        act(m, "Add images…", self.add_images, "Ctrl+O")
-        act(m, "Open preset…", self.open_preset)
-        act(m, "Save preset…", self.save_preset, "Ctrl+S")
+        act(m, "Add images…", self.add_images, "Ctrl+O", "image-plus")
+        act(m, "Open preset…", self.open_preset, None, "folder-open")
+        act(m, "Save preset…", self.save_preset, "Ctrl+S", "save")
         m.addSeparator()
-        act(m, "Export PDF/PNG…", self.export, "Ctrl+E")
-        act(m, "Print…", self.print_, "Ctrl+P")
+        act(m, "Export PDF/PNG…", self.export, "Ctrl+E", "share")
+        act(m, "Print…", self.print_, "Ctrl+P", "printer")
         m.addSeparator()
-        act(m, "Preferences…", self.preferences, QKeySequence("Ctrl+,")).setMenuRole(QAction.MenuRole.PreferencesRole)
+        act(m, "Preferences…", self.preferences, QKeySequence("Ctrl+,"), "settings").setMenuRole(QAction.MenuRole.PreferencesRole)
         m.addSeparator()
-        act(m, "Quit", self.close, "Ctrl+Q")
+        act(m, "Quit", self.close, "Ctrl+Q", "log-out")
         # Page navigation: a row centred directly under the page preview.
         nav = QWidget()
         self._nav_btns = []
@@ -835,14 +781,15 @@ class MainWindow(QMainWindow):
         row.addStretch()
         # Glyph-only buttons need a real name for screen readers and Voice Control.
         # goto() clamps, so first/last are just a far jump in either direction.
-        for text, to_end, step, key in (("First Page", True, -10**9, "Ctrl+Home"), ("Previous Page", False, -1, "PgUp"),
-                                        ("Next Page", False, 1, "PgDown"), ("Last Page", True, 10**9, "Ctrl+End")):
+        for text, icon, step, key in (("First Page", "chevron-first", -10**9, "Ctrl+Home"), ("Previous Page", "chevron-left", -1, "PgUp"),
+                                      ("Next Page", "chevron-right", 1, "PgDown"), ("Last Page", "chevron-last", 10**9, "Ctrl+End")):
             a = QAction(text, self)
             a.triggered.connect(lambda _=False, d=step: self.goto(self.page_no + d))
             a.setShortcut(key)
             a.setToolTip(f"{text} ({key})")
             self.addAction(a)   # keeps the shortcut working anywhere in the window
-            btn = _NavButton(to_end, step > 0)
+            self._menu_icons.append((a, icon))
+            btn = _icon_button()
             btn.setDefaultAction(a)
             btn.setAccessibleName(text)
             btn.setAutoRaise(True)
@@ -859,7 +806,8 @@ class MainWindow(QMainWindow):
         flip.setShortcut("Ctrl+R")
         flip.triggered.connect(lambda: self.orient.setCurrentIndex(1 - self.orient.currentIndex()))
         self.addAction(flip)
-        flip_btn = _RotateButton()
+        self._menu_icons.append((flip, "rotate-cw"))
+        flip_btn = _icon_button()
         flip_btn.setDefaultAction(flip)
         flip_btn.setAccessibleName("Rotate page")
         flip_btn.setAutoRaise(True)
@@ -872,9 +820,10 @@ class MainWindow(QMainWindow):
         self.undo_act.setShortcut(QKeySequence.StandardKey.Undo)
         self.redo_act = self.undo_stack.createRedoAction(self, "Redo")
         self.redo_act.setShortcut(QKeySequence.StandardKey.Redo)
+        self._menu_icons += [(self.undo_act, "undo-2"), (self.redo_act, "redo-2")]
         e.addActions([self.undo_act, self.redo_act])
         e.addSeparator()
-        self.remove_act = act(e, "Remove Image", self.remove_selected, QKeySequence.StandardKey.Delete)
+        self.remove_act = act(e, "Remove Image", self.remove_selected, QKeySequence.StandardKey.Delete, "trash-2")
         # Delete only fires while the list has focus, so it can't eat a keystroke in a spin box.
         self.remove_act.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
         self.list.addAction(self.remove_act)
@@ -888,14 +837,15 @@ class MainWindow(QMainWindow):
         self.preview.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.preview.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.preview.customContextMenuRequested.connect(self._preview_menu)
-        act(e, "Center Photo in Frame", self._center_photo)
-        act(e, "Sort Photos by Date", self._sort_by_date)
+        act(e, "Center Photo in Frame", self._center_photo, None, "crosshair")
+        act(e, "Sort Photos by Date", self._sort_by_date, None, "calendar-arrow-down")
         e.addSeparator()
-        self.front_act = act(e, "Bring to Front", lambda: self._z_order(True), "Ctrl+Shift+]")
-        self.back_act = act(e, "Send to Back", lambda: self._z_order(False), "Ctrl+Shift+[")
+        self.front_act = act(e, "Bring to Front", lambda: self._z_order(True), "Ctrl+Shift+]", "bring-to-front")
+        self.back_act = act(e, "Send to Back", lambda: self._z_order(False), "Ctrl+Shift+[", "send-to-back")
         v = self.menuBar().addMenu("&View")
-        v.addAction(self.layout_dock.toggleViewAction())
-        v.addAction(self.image_dock.toggleViewAction())
+        for dock, icon in ((self.layout_dock, "panel-left"), (self.image_dock, "images")):
+            v.addAction(dock.toggleViewAction())
+            self._menu_icons.append((dock.toggleViewAction(), icon))
         v.addSeparator()
         def rulers_on(on):
             for r in (self.hruler, self.vruler):
@@ -910,17 +860,18 @@ class MainWindow(QMainWindow):
         self.inches_act = QAction("Rulers in Inches", self, checkable=True)
         for a, fn in ((self.rulers_act, rulers_on), (self.inches_act, rulers_in)):
             a.toggled.connect(fn)   # toggled, not triggered: restoring a setting with setChecked must apply it too
+        self._menu_icons += [(self.rulers_act, "ruler"), (self.inches_act, "ruler")]
         v.addAction(self.rulers_act)   # the unit is a preference (Edit > Preferences), not a menu item
         v.addSeparator()
-        fit_a = act(v, "Fit to Window", lambda: self.set_zoom(None), "Ctrl+0")
-        actual_a = act(v, "Actual Size", lambda: self.set_zoom(1.0), "Ctrl+1")
-        in_a = act(v, "Zoom In", lambda: self.set_zoom((self.zoom or self._fit_zoom()) * 1.25), QKeySequence.StandardKey.ZoomIn)
-        out_a = act(v, "Zoom Out", lambda: self.set_zoom((self.zoom or self._fit_zoom()) / 1.25), QKeySequence.StandardKey.ZoomOut)
+        fit_a = act(v, "Fit to Window", lambda: self.set_zoom(None), "Ctrl+0", "maximize-2")
+        actual_a = act(v, "Actual Size", lambda: self.set_zoom(1.0), "Ctrl+1", "scan")
+        in_a = act(v, "Zoom In", lambda: self.set_zoom((self.zoom or self._fit_zoom()) * 1.25), QKeySequence.StandardKey.ZoomIn, "zoom-in")
+        out_a = act(v, "Zoom Out", lambda: self.set_zoom((self.zoom or self._fit_zoom()) / 1.25), QKeySequence.StandardKey.ZoomOut, "zoom-out")
         # The same commands as buttons right beside the page controls, so zooming is one click away.
         nav_row = self._nav_row
         nav_row.itemAt(0).spacerItem().changeSize(0, 0)   # the zoom buttons take the left side, so the old balancing space goes
         for i, (kind, a) in enumerate((("out", out_a), ("in", in_a), ("actual", actual_a), ("fit", fit_a))):
-            btn = _ZoomButton(kind)
+            btn = _icon_button()
             btn.setDefaultAction(a)
             btn.setToolTip(f"{a.text()} ({a.shortcut().toString(QKeySequence.SequenceFormat.NativeText)})")
             btn.setAccessibleName(a.text())
@@ -930,11 +881,11 @@ class MainWindow(QMainWindow):
         nav_row.insertSpacing(6, 16)
         nav_row.addSpacing(4 * 26 + 16 - 40)   # balances the zoom buttons (the rotate button's 40 is already there): the page buttons stay centred
         v.addSeparator()
-        act(v, "Larger Text", lambda: change_text_size(+1))
-        act(v, "Smaller Text", lambda: change_text_size(-1))
+        act(v, "Larger Text", lambda: change_text_size(+1), None, "a-arrow-up")
+        act(v, "Smaller Text", lambda: change_text_size(-1), None, "a-arrow-down")
         h = self.menuBar().addMenu("&Help")
-        act(h, "About PhotoSheet", self._about)
-        act(h, "About Qt", lambda: QMessageBox.aboutQt(self, "About Qt"))
+        act(h, "About PhotoSheet", self._about, None, "info")
+        act(h, "About Qt", lambda: QMessageBox.aboutQt(self, "About Qt"), None, "circle-help")
 
     def _about(self):
         box = QMessageBox(self)
@@ -2124,9 +2075,15 @@ class MainWindow(QMainWindow):
         pal.setColor(vp.backgroundRole(), desk_color(self.palette().color(QPalette.ColorRole.Window)))
         vp.setPalette(pal)
 
+    def _tint_menu_icons(self):
+        c = self.palette().color(QPalette.ColorRole.WindowText)
+        for a, name in getattr(self, "_menu_icons", ()):   # a palette change can arrive before the menu exists
+            a.setIcon(_menu_icon(name, c))
+
     def changeEvent(self, ev):
         if ev.type() == QEvent.Type.PaletteChange:   # light/dark switch while the app is open
             self._apply_desk()
+            self._tint_menu_icons()
         super().changeEvent(ev)
 
     def _fit_zoom(self) -> float:

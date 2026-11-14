@@ -109,7 +109,7 @@ photosheet-cli photos/*.jpg -o calendar.png --layout calendar --year 2027 --crop
 Needs Python 3.11 or newer.
 
 ```sh
-pip install photosheet  # from PyPI (or:  make pins  to install the pinned version, plus a desktop launcher)
+pip install photosheet  # from PyPI (or:  make install-pypi  to install the pinned version, plus a desktop launcher)
 pip install -e .        # or:  make install-dev   (also adds a desktop launcher and icon)
 photosheet              # start the app
 ```
