@@ -88,7 +88,7 @@ def _prefetch(items, printer_profile, fast, progress=None, cancel=None, sides=No
     Returns get(item): the photo from this call, so a small cache cannot throw it out before it is drawn.
     progress(done, total) is called from worker threads as each photo finishes.
     sides: each item's slot size in pixels (parallel to items), so previews load photos no bigger than needed."""
-    todo = list({id(i): i for i in items}.values())
+    todo = list({id(i): i for i in items if i.path}.values())   # empty Collage boxes have nothing to load
     side = {}
     for i, sd in zip(items, sides or []):   # a photo used twice loads at its largest slot
         side[id(i)] = max(side.get(id(i), 0), sd)
@@ -475,7 +475,14 @@ def render_page(layout: Layout, page: int, dpi: int = 150, printer_profile: str 
             placed(k, len(slots))
             w, h = max(1, round(r.w * s)), max(1, round(r.h * s))
             tmp = Image.new("RGBA", (w, h), (255, 255, 255, 0))
-            _place(tmp, item, get(item), Rect(0, 0, r.w, r.h), s, fast)
+            if item.path:
+                _place(tmp, item, get(item), Rect(0, 0, r.w, r.h), s, fast)
+            elif fast:   # an empty box shows on screen only: it never prints
+                d = ImageDraw.Draw(tmp)   # a light tile with a "+": a place waiting for a photo
+                d.rectangle((0, 0, w - 1, h - 1), fill=(240, 240, 240, 255), outline=(160, 160, 160, 255), width=max(1, round(s)))
+                m, a = min(w, h) // 8, max(1, round(1.5 * s))
+                d.line((w / 2 - m, h / 2, w / 2 + m, h / 2), fill=(160, 160, 160, 255), width=a)
+                d.line((w / 2, h / 2 - m, w / 2, h / 2 + m), fill=(160, 160, 160, 255), width=a)
             if angle:
                 tmp = tmp.rotate(-angle, Image.BICUBIC, expand=True, fillcolor=(255, 255, 255, 0))   # PIL turns counter-clockwise
             tmp.putalpha(_fade(tmp.getchannel("A"), layout.feather * s / 2))

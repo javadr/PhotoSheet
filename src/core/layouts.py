@@ -276,6 +276,8 @@ def _size(path: str, mtime: int) -> tuple[int, int]:
 
 def aspect(item: ImageItem) -> float:
     """Width / height of the image as it will be drawn. Unreadable files count as square so layout never crashes."""
+    if not item.path:   # an empty Collage box has the shape of its box
+        return item.box[2] / item.box[3] if item.box else 1.0
     try:
         w, h = _size(item.path, os.stat(item.path).st_mtime_ns)
         t = math.radians(item.angle)
@@ -738,6 +740,15 @@ class Collage(Layout):
                 w = r.w / (c + sn / a0)
                 h = w / a0
                 img.box = (r.x + (r.w - w) / 2, r.y + (r.h - h) / 2, w, h)
+
+    def rescale_from(self, old: PageExtent) -> None:
+        """The page changed size or margins: carry every box to the same relative place and size in the new page."""
+        p = self.page
+        sx, sy = p.imageable_w / old.imageable_w, p.imageable_h / old.imageable_h
+        for i in self.images:
+            if i.box:
+                x, y, w, h = i.box
+                i.box = (p.left + (x - old.left) * sx, p.top + (y - old.top) * sy, w * sx, h * sy)
 
     def _place_new(self, item: ImageItem, n: int) -> None:
         p = self.page

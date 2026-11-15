@@ -16,8 +16,8 @@ from PySide6.QtGui import QGuiApplication, QIcon, QStandardItem, QStandardItemMo
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QStyledItemDelegate, QStyleOptionViewItem, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
-    QHBoxLayout, QInputDialog, QLabel, QListWidget, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
-    QFrame, QGraphicsDropShadowEffect, QLineEdit, QSlider, QStyle, QStyleOptionToolButton, QStylePainter, QToolButton, QToolTip, QVBoxLayout, QWidget,
+    QHBoxLayout, QInputDialog, QLabel, QWidgetAction, QListWidget, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
+    QFrame, QGraphicsDropShadowEffect, QGroupBox, QLineEdit, QSlider, QStyle, QStyleOptionToolButton, QStylePainter, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
 
 from .. import __version__, settings
@@ -589,7 +589,7 @@ class _PageLabel(QLabel):
                 p.setBrush(hl)
                 p.drawEllipse(shape)
                 continue
-            elif kind == "handle":
+            elif kind in ("handle", "edge"):
                 p.setPen(QPen(QColor(255, 255, 255), 1))
                 p.setBrush(hl)
             else:
@@ -972,13 +972,50 @@ class MainWindow(QMainWindow):
         self.snap.setChecked(True)
         self.snap.setToolTip("Moves and resizes snap to the page edges and centre, and to other photos.\n"
                              "Hold Ctrl while dragging to turn snapping off for that drag.")
-        # One pull-down button (HIG pull-down-buttons.md): saving, loading and deleting are all about the saved collages.
-        self.collage_lib = QPushButton("My Collages")
-        self.collage_lib.setToolTip("Save this collage, or load one you saved earlier.")
+        # Collage panel: two titled groups (HIG boxes.md), buttons in a grid so every edge lines up.
+        def group(title):
+            g = QGroupBox(title)
+            grid = QGridLayout(g)
+            grid.setHorizontalSpacing(8)
+            return g, grid
+        self.collage_panel = QWidget()
+        panel = QVBoxLayout(self.collage_panel)
+        panel.setContentsMargins(0, 0, 0, 0)
+        boxes, grid = group("Boxes")
+        add_box = QPushButton("Add box")
+        add_box.setToolTip("Add an empty box. Photos you add next fill the empty boxes first.")
+        add_box.clicked.connect(self.add_empty_box)
+        self.arrange_btn = QPushButton("Auto-arrange")
+        self.arrange_btn.setToolTip("Lay all photos out again, whole and without overlap.")
+        self.arrange_btn.clicked.connect(self._auto_arrange)
+        reset = QPushButton("Reset to default")
+        reset.setToolTip("Remove empty boxes, straighten every photo and arrange them again. Undo brings the old arrangement back.")
+        reset.clicked.connect(self.reset_collage)
+        self.collage_hint = QLabel("Drag a box to move it. Drag a corner to resize, or a side to stretch one way. Hold Shift to change the shape.")
+        self.collage_hint.setWordWrap(True)
+        pal = self.collage_hint.palette()   # secondary text that stays readable: PlaceholderText can vanish on some themes
+        ink = pal.color(QPalette.ColorRole.WindowText)
+        ink.setAlpha(190)
+        pal.setColor(QPalette.ColorRole.WindowText, ink)
+        self.collage_hint.setPalette(pal)
+        grid.addWidget(add_box, 0, 0)
+        grid.addWidget(self.arrange_btn, 0, 1)
+        grid.addWidget(reset, 1, 0, 1, 2)
+        grid.addWidget(self.snap, 2, 0, 1, 2)
+        grid.addWidget(self.collage_hint, 3, 0, 1, 2)
+        saved, grid = group("Saved arrangements")
+        save_btn = QPushButton("Save…")
+        save_btn.setToolTip("Save the box positions under a name, to load again in any later session. Photos are not saved.")
+        save_btn.clicked.connect(self.save_my_collage)
+        self.collage_lib = QPushButton("Open")   # a pull-down (HIG pull-down-buttons.md): your saved arrangements, and Delete
+        self.collage_lib.setToolTip("Apply a saved arrangement to the current photos.")
         self.collage_lib.setMenu(QMenu(self.collage_lib))
         self.collage_lib.menu().aboutToShow.connect(self._fill_my_collages)
-        self.arrange_btn = QPushButton("Auto-arrange")
-        self.arrange_btn.clicked.connect(self._auto_arrange)
+        grid.addWidget(save_btn, 0, 0)
+        grid.addWidget(self.collage_lib, 0, 1)
+        panel.addWidget(boxes)
+        panel.addWidget(saved)
+        self.snap.toggled.connect(self._layout_changed)
         self.mat = self._spin(0, 200, 36)
         self.mat_color = QComboBox()
         self.mat_color.addItems(["White", "Black", "Cream"])
@@ -1066,7 +1103,6 @@ class MainWindow(QMainWindow):
         self.tl_dates.setChecked(True)
         self.tl_dates.setToolTip("Dates come from each photo's own data; the file name is shown for photos without one.")
         self.shuffle_btn.clicked.connect(self._shuffle)
-        self.collage_hint = QLabel("Drag a photo to move it, drag a corner\nto resize (Shift = free shape).")
         self.strip_w, self.strip_h = self._dspin(20, 400, 51), self._dspin(40, 600, 152)
         self.crop = QCheckBox("Crop all images to fill")
         self.crop.setChecked(True)
@@ -1094,7 +1130,7 @@ class MainWindow(QMainWindow):
             ("strip", "Strip length (mm)", self.strip_h), ("strip,filmstrip", "Direction", self.direction),
             ("polaroid", "Border (pt)", self.border), ("triptych", "Panels", self.panels),
             ("triptych", "", self.vertical), ("package", "Sheet", self.recipe),
-            ("collage", "", self.collage_lib), ("collage", "", self.snap), ("collage", "", self.arrange_btn), ("collage", "", self.collage_hint),
+            ("collage", "", self.collage_panel),
             ("framed", "Mat width (pt)", self.mat), ("framed", "Mat colour", self.mat_color),
             ("badges", "Badge size", self.badge_size), ("disc", "Label size", self.disc_size), ("badges,disc", "Diameter (mm)", self.diameter), ("disc", "Hole (mm)", self.disc_hole), ("disc", "Photos per disc", self.disc_n), ("disc", "", self.disc_tile),
             ("cassette,vhs,cover", "Arrangement", self.case_mode), ("cover", "Case", self.cover_size), ("badges", "Pin-back margin (mm)", self.bleed), ("badges", "", self.fill_margin), ("badges", "", self.staggered),
@@ -1113,11 +1149,14 @@ class MainWindow(QMainWindow):
             ("timeline", "Photos per page", self.tl_n), ("timeline", "", self.tl_dates), ("timeline", "", self.tl_right), ("checker", "", self.ck_empty), ("stairs", "Photos per page", self.st_n), ("stairs", "", self.st_rise),
             ("all", "", self.crop),
         ]:
-            (pinned if any(w is x for x in pinned_widgets) else form).addRow(labels.label(label), w)
+            if w is self.collage_panel:
+                form.addRow(w)   # the groups take the full width, no empty label column beside them
+            else:
+                (pinned if any(w is x for x in pinned_widgets) else form).addRow(labels.label(label), w)
             if isinstance(w, SliderSpin):
                 w.set_label(label)
             self.rowsof.setdefault(key, []).append(w)
-            if any(w is x for x in (self.size_preset, self.badge_size, self.disc_size, self.per_sheet, self.recipe, self.arrange_btn, self.collage_hint, self.collage_lib,
+            if any(w is x for x in (self.size_preset, self.badge_size, self.disc_size, self.per_sheet, self.recipe, self.collage_panel,
                                    self.shuffle_btn)):
                 continue  # wired separately (presets, recipe, button) or have no value to watch
             w_changed = getattr(w, "currentIndexChanged", None) or getattr(w, "toggled", None) or w.valueChanged
@@ -1606,8 +1645,12 @@ class MainWindow(QMainWindow):
                       gutter=self.gutter.value())
         self.layout_ = cls(page=page, texts=list(self.cap_texts), feather=self.feather.value() if cls not in (Poster, Triptych) else 0, **kw)
         for it in old.images:
+            if not it.path and cls is not Collage:
+                continue   # empty boxes exist only in a Collage
             it.crop = self.crop.isChecked()
             self.layout_.add(it)
+        if cls is Collage and isinstance(old, Collage) and old.page != self.layout_.page:
+            self.layout_.rescale_from(old.page)   # boxes follow the paper when it grows or shrinks
         if cls is Carousel and not isinstance(old, Carousel):
             self._sync_segments()   # entering Carousel: one wedge per photo
         self.preview.overlay = []
@@ -1902,7 +1945,7 @@ class MainWindow(QMainWindow):
     def _fill_list(self):
         self.list.clear()
         for it in self.layout_.images:
-            self.list.addItem(it.path.rsplit("/", 1)[-1])
+            self.list.addItem(it.path.rsplit("/", 1)[-1] or "Empty box")
         self.image_dock.setWindowTitle(f"Images ({self.list.count()})" if self.list.count() > 1 else "Images")
 
     def _edit(self, text, change, merge=False):
@@ -1928,7 +1971,12 @@ class MainWindow(QMainWindow):
 
     def _add_files(self, files):
         def change():
-            for f in files:
+            files_ = list(files)
+            for blank in (i for i in self.layout_.images if not i.path):   # new photos fill empty boxes first
+                if not files_:
+                    break
+                blank.path, blank.crop = files_.pop(0), True
+            for f in files_:
                 self.layout_.add(ImageItem(f, crop=self.crop.isChecked()))
         self._edit("Add Images", change)
         self._sync_segments()
@@ -2300,6 +2348,8 @@ class MainWindow(QMainWindow):
         top, knob = self._rot_handle(item, slot)
         return [(QPolygonF([pts[0], pts[1], pts[3], pts[2]]), "sel"), (QPolygonF([top, knob]), "sel")] + [
             (QRectF(pt.x() - HANDLE, pt.y() - HANDLE, 2 * HANDLE, 2 * HANDLE), "handle") for pt in pts] + [
+            (QRectF(m.x() - HANDLE / 2, m.y() - HANDLE / 2, HANDLE, HANDLE), "edge")   # side handles: stretch one way
+            for m in ((pts[0] + pts[1]) / 2, (pts[2] + pts[3]) / 2, (pts[0] + pts[2]) / 2, (pts[1] + pts[3]) / 2)] + [
             (QRectF(knob.x() - HANDLE - 1, knob.y() - HANDLE - 1, 2 * HANDLE + 2, 2 * HANDLE + 2), "rot")]
 
     def _others_overlay(self, skip) -> list:
@@ -2347,6 +2397,16 @@ class MainWindow(QMainWindow):
                 return c
         return None
 
+    def _edge_at(self, pos, corners):
+        """The box edge under pos (0 top, 1 bottom, 2 left, 3 right), or None. Corners are tested first by the caller."""
+        for e, (a, b) in enumerate(((0, 1), (2, 3), (0, 2), (1, 3))):
+            p, v = corners[a], corners[b] - corners[a]
+            t = max(0.0, min(1.0, QPointF.dotProduct(pos - p, v) / max(1e-9, QPointF.dotProduct(v, v))))
+            d = p + v * t - pos
+            if math.hypot(d.x(), d.y()) <= HANDLE:
+                return e
+        return None
+
     def _collage_drag(self, ev):
         """Apply the current mouse position to the photo being moved or resized (snapping unless Ctrl is held)."""
         cl, lay = self._cl, self.layout_
@@ -2371,6 +2431,28 @@ class MainWindow(QMainWindow):
             self.angle.setValue(ang)
             self._loading = False
             new, snap = lay.clamp((x, y, w, h), ang), False
+        elif cl["mode"] == "resize" and cl["edge"] is not None:   # one side moves, the opposite side and the other axis stay
+            e, ang = cl["edge"], cl["item"].angle
+            co, si = math.cos(math.radians(ang)), math.sin(math.radians(ang))
+            cx0, cy0 = x + w / 2, y + h / 2
+            mx, my = dx * co + dy * si, -dx * si + dy * co   # mouse movement in the box's own frame
+            pg = lay.page
+            vert = e < 2   # top / bottom edge: the height changes
+            s_ = -1 if e in (0, 2) else 1
+            half, move = (h / 2, my) if vert else (w / 2, mx)
+            fixed = -s_ * half
+            pos_e = s_ * half + move
+            if snap and not ang:
+                pos_e += snap_delta([(cy0 if vert else cx0) + pos_e], ys if vert else xs, tol) or 0.0
+            n = max(abs(pos_e - fixed), 12.0)
+            if not ang:   # the growing edge stops at the page margin
+                c0, lo, size = (cy0, pg.top, pg.imageable_h) if vert else (cx0, pg.left, pg.imageable_w)
+                n = min(n, (lo + size - (c0 + fixed)) if s_ > 0 else (c0 + fixed - lo))
+            nw, nh = (w, n) if vert else (n, h)
+            lx, ly = (0.0, fixed + s_ * n / 2) if vert else (fixed + s_ * n / 2, 0.0)
+            ncx, ncy = cx0 + lx * co - ly * si, cy0 + lx * si + ly * co
+            new = lay.clamp((ncx - nw / 2, ncy - nh / 2, nw, nh), ang)
+            cl["item"].box = tuple(new)
         elif cl["mode"] == "move":
             nx, ny = x + dx, y + dy
             if snap:
@@ -2430,13 +2512,15 @@ class MainWindow(QMainWindow):
             pos = ev.position()
             slots = dict(self._slots_now())
             row = self.list.currentRow()
-            mode = idx = corner = None
+            mode = idx = corner = edge = None
             if row in slots:                                    # the selected photo's handles win over photos beneath
                 if self._on_rot_handle(pos, lay.images[row], slots[row]):
                     mode, idx = "rotate", row
                 else:
-                    corner = self._corner_at(pos, self._box_corners(lay.images[row], slots[row]))
-                    if corner is not None:
+                    pts = self._box_corners(lay.images[row], slots[row])
+                    corner = self._corner_at(pos, pts)
+                    edge = None if corner is not None else self._edge_at(pos, pts)
+                    if corner is not None or edge is not None:
                         mode, idx = "resize", row
             if mode is None:
                 hit = self._slot_at(pos)                        # topmost photo under the cursor
@@ -2447,7 +2531,7 @@ class MainWindow(QMainWindow):
             self.list.setCurrentRow(idx)
             z = self.zoom if self.zoom is not None else self._fit_zoom()
             r = slots[idx]
-            self._cl = dict(mode=mode, idx=idx, corner=corner, start=pos, box0=(r.x, r.y, r.w, r.h), angle0=lay.images[idx].angle,
+            self._cl = dict(mode=mode, idx=idx, corner=corner, edge=edge, start=pos, box0=(r.x, r.y, r.w, r.h), angle0=lay.images[idx].angle,
                             k=self.SCREEN_DPI * z / 72, before=copy.deepcopy(lay.images), moved=False,
                             item=lay.images[idx])
             if mode == "rotate":
@@ -2460,11 +2544,15 @@ class MainWindow(QMainWindow):
             if not ev.buttons():
                 slots = dict(self._slots_now())
                 row = self.list.currentRow()
-                corner = self._corner_at(ev.position(), self._box_corners(lay.images[row], slots[row])) if row in slots else None
+                pts = self._box_corners(lay.images[row], slots[row]) if row in slots else None
+                corner = self._corner_at(ev.position(), pts) if pts else None
+                edge = self._edge_at(ev.position(), pts) if pts and corner is None else None
                 if row in slots and self._on_rot_handle(ev.position(), lay.images[row], slots[row]):
                     shape = Qt.CursorShape.OpenHandCursor
                 elif corner is not None:
                     shape = Qt.CursorShape.SizeFDiagCursor if corner in (0, 3) else Qt.CursorShape.SizeBDiagCursor
+                elif edge is not None:
+                    shape = Qt.CursorShape.SizeVerCursor if edge < 2 else Qt.CursorShape.SizeHorCursor
                 elif self._slot_at(ev.position()):
                     shape = Qt.CursorShape.SizeAllCursor
                 else:
@@ -2654,7 +2742,7 @@ class MainWindow(QMainWindow):
         self._dpr, self._pending_zoom = dpr, z
         gen = self._gen
         try:   # only this page's photos that are not cached yet; layouts without slots just skip the notice
-            self._cold = uncached([i for i, _ in self.layout_.slots(self.page_no)])
+            self._cold = uncached([i for i, _ in self.layout_.slots(self.page_no) if i.path])
         except Exception:
             self._cold = 0
         self.busy_timer.start()
@@ -2705,20 +2793,62 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Save preset", f"Could not save {os.path.basename(f)}: {e}")
 
     def _fill_my_collages(self):
+        """One row per saved arrangement: a trash icon (asks before deleting), then the name (applies it)."""
         m = self.collage_lib.menu()
         m.clear()
-        m.addAction("Save Current Collage…", self.save_my_collage)
         files = sorted(settings.collages_dir().glob("*.collage"), key=lambda p: p.stem.lower())
-        m.addSeparator()
-        for f in files:
-            m.addAction(f.stem, lambda f=f: self.load_my_collage(f))
         if not files:
-            m.addAction("No Saved Collages").setEnabled(False)
-        else:
-            m.addSeparator()
-            d = m.addMenu("Delete")
-            for f in files:
-                d.addAction(f.stem, lambda f=f: self._delete_my_collage(f))
+            m.addAction("No saved arrangements yet").setEnabled(False)
+        ink = self.palette().color(QPalette.ColorRole.WindowText)
+        for f in files:
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(6, 1, 10, 1)
+            trash = QToolButton()
+            trash.setAutoRaise(True)
+            trash.setIcon(_menu_icon("trash-2", ink))
+            trash.setToolTip(f"Delete “{f.stem}”…")
+            trash.setAccessibleName(f"Delete {f.stem}")
+            trash.clicked.connect(lambda _=False, f=f: (m.close(), self._delete_my_collage(f)))
+            name = QPushButton(f.stem)
+            name.setFlat(True)
+            name.setStyleSheet("text-align: left; padding: 4px 6px;")
+            name.clicked.connect(lambda _=False, f=f: (m.close(), self.load_my_collage(f)))
+            h.addWidget(trash)
+            h.addWidget(name, 1)
+            wa = QWidgetAction(m)
+            wa.setDefaultWidget(row)
+            m.addAction(wa)
+
+    def add_empty_box(self):
+        """A box with no photo yet: drag it into place, then add photos and they fill the empty boxes first."""
+        lay = self.layout_
+        if not isinstance(lay, Collage):
+            return
+
+        def change():
+            item = ImageItem("", crop=True, box=(0.0, 0.0, 3.0, 2.0))   # only the 3:2 shape is kept
+            lay.images.append(item)
+            lay._place_new(item, len(lay.images) - 1)
+        self._edit("Add Empty Box", change)
+        self._fill_list()
+        self.list.setCurrentRow(len(lay.images) - 1)
+        self.refresh()
+
+    def reset_collage(self):
+        """Back to the default: no empty boxes, every photo laid out whole again. Undo restores the old arrangement."""
+        lay = self.layout_
+        if not isinstance(lay, Collage):
+            return
+
+        def change():
+            lay.images[:] = [i for i in lay.images if i.path]
+            for i in lay.images:
+                i.angle = 0.0
+            lay.autoarrange()
+        self._edit("Reset Collage", change)
+        self._fill_list()
+        self.refresh()
 
     def load_my_collage(self, f):
         if not isinstance(self.layout_, Collage):
@@ -2747,7 +2877,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Save collage", f"Could not save “{name}”: {e}")
 
     def _delete_my_collage(self, f):
-        if QMessageBox.question(self, "Delete collage", f"Delete “{f.stem}”? This can't be undone.") == QMessageBox.StandardButton.Yes:
+        Yes, No = QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No
+        if QMessageBox.question(self, "Delete arrangement", f"Delete “{f.stem}”? This can't be undone.", Yes | No, No) == Yes:   # Cancel is the default
             try:
                 f.unlink()
             except OSError as e:

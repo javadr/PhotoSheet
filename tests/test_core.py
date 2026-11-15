@@ -1106,3 +1106,20 @@ def test_collage_boxes_roundtrip_without_photos(tmp_path):
     preset.apply_boxes(b, str(f))
     assert b.page.width == 595 and b.images[0].box == (10, 20, 100, 50) and b.images[0].angle == 15
     assert b.images[2].box is None and b.images[0].path == "n1.jpg"
+
+
+def test_collage_empty_boxes(tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.geometry import PageExtent
+    from photosheet.core.layouts import Collage, ImageItem
+    a = Collage(page=PageExtent(595, 842), images=[ImageItem("", box=(10, 20, 100, 50)), ImageItem("", box=(5, 5, 40, 40))])
+    f = tmp_path / "x.collage"
+    preset.save_boxes(a, str(f))
+    from PIL import Image
+    Image.new("RGB", (40, 30), "red").save(tmp_path / "p.jpg")
+    b = Collage(page=PageExtent(595, 842), images=[ImageItem(str(tmp_path / "p.jpg"))])
+    preset.apply_boxes(b, str(f))
+    assert [i.path for i in b.images] == [str(tmp_path / "p.jpg"), ""] and b.images[1].box == (5, 5, 40, 40)
+    from photosheet.core.render import render_page
+    assert render_page(b, b.page, 20, fast=False).size   # an empty box neither loads nor prints
+    render_page(b, b.page, 20, fast=True)

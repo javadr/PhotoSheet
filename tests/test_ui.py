@@ -1647,3 +1647,67 @@ def test_zoom_buttons_beside_the_page_controls_run_the_view_commands(app):
     assert w.zoom == pytest.approx(0.8)
     btns["Fit to Window"].click()
     assert w.zoom is None
+
+
+def test_collage_edge_drag_moves_one_side_only(app, tmp_path):
+    from PySide6.QtCore import QPointF
+    w = _collage_window(app, tmp_path)
+    k = _scale(w)
+    w.list.setCurrentRow(0)
+    r = w._slot_rect(dict(w._slots_now())[0])
+    p = QPointF(r.right(), r.center().y())                       # middle of the right edge
+    _mouse(app, w, "press", p)
+    _mouse(app, w, "move", p + QPointF(20, 9))
+    _mouse(app, w, "move", p + QPointF(50, 9))
+    _mouse(app, w, "release", p + QPointF(50, 9))
+    x, y, bw, bh = w.layout_.images[0].box
+    assert (x, y, bh) == pytest.approx((60, 60, 90)) and bw == pytest.approx(120 + 50 / k)   # only the width grew
+
+
+def test_collage_empty_boxes_fill_with_new_photos_and_reset(app, tmp_path):
+    w = _collage_window(app, tmp_path)
+    n = len(w.layout_.images)
+    w.add_empty_box()
+    assert len(w.layout_.images) == n + 1 and not w.layout_.images[-1].path and w.list.item(n).text() == "Empty box"
+    w.refresh()                                                  # the preview draws it without trying to open a file
+    extra = tmp_path / "extra.png"
+    from PIL import Image
+    Image.new("RGB", (30, 20), "blue").save(extra)
+    box = w.layout_.images[-1].box
+    w._add_files([str(extra)])
+    assert len(w.layout_.images) == n + 1 and w.layout_.images[-1].path == str(extra) and w.layout_.images[-1].box == box
+    w.add_empty_box()
+    w.reset_collage()
+    assert all(i.path for i in w.layout_.images) and len(w.layout_.images) == n + 1
+    w.undo_stack.undo()
+    assert len(w.layout_.images) == n + 2
+
+
+def test_saved_arrangement_rows_load_and_delete_only_after_confirming(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox, QPushButton, QToolButton, QWidgetAction
+    from photosheet import settings
+    monkeypatch.setattr(settings, "collages_dir", lambda: tmp_path / "c")
+    w = _collage_window(app, tmp_path)
+    (tmp_path / "c").mkdir()
+    from photosheet.core import preset
+    preset.save_boxes(w.layout_, str(tmp_path / "c" / "mine.collage"))
+    w._fill_my_collages()
+    row = [a for a in w.collage_lib.menu().actions() if isinstance(a, QWidgetAction)][0].defaultWidget()
+    assert row.findChild(QPushButton).text() == "mine"
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No))
+    row.findChild(QToolButton).click()
+    assert (tmp_path / "c" / "mine.collage").exists()            # declined: nothing is deleted
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes))
+    row.findChild(QToolButton).click()
+    assert not (tmp_path / "c" / "mine.collage").exists()
+
+
+def test_collage_boxes_follow_a_paper_size_change(app, tmp_path):
+    w = _collage_window(app, tmp_path)
+    old, box = w.layout_.page, w.layout_.images[0].box
+    w.page_size.setCurrentIndex(w.page_size.findData("A5"))
+    new = w.layout_.page
+    sx, sy = new.imageable_w / old.imageable_w, new.imageable_h / old.imageable_h
+    x, y, bw, bh = w.layout_.images[0].box
+    assert (sx, sy) != (1, 1) and (bw, bh) == pytest.approx((box[2] * sx, box[3] * sy))
+    assert x == pytest.approx(new.left + (box[0] - old.left) * sx)

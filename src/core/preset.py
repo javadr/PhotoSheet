@@ -81,7 +81,8 @@ def save_boxes(layout: Collage, path: str) -> None:
 
 
 def apply_boxes(layout: Collage, path: str) -> None:
-    """Put the saved boxes on the current photos in order; photos beyond the saved ones are placed automatically."""
+    """Put the saved boxes on the current photos in order. Saved boxes left over become empty boxes; photos beyond
+    the saved ones are placed automatically."""
     with open(path) as f:
         d = json.load(f)
     page = PageExtent(**_known(PageExtent, d["page"]))
@@ -89,7 +90,10 @@ def apply_boxes(layout: Collage, path: str) -> None:
         raise ValueError(f"page size must be between 0 and {MAX_PT} pt")
     boxes = d["boxes"]
     layout.page, layout.snap = page, bool(d.get("snap", True))
-    for n, img in enumerate(layout.images):
+    photos = [i for i in layout.images if i.path]
+    for n, img in enumerate(photos):
         b = boxes[n] if n < len(boxes) else {}
         img.box = tuple(b["box"]) if b.get("box") else None
         img.angle = float(b.get("angle", 0.0))
+    layout.images[:] = photos + [ImageItem("", crop=True, box=tuple(b["box"]), angle=float(b.get("angle", 0.0)))
+                                 for b in boxes[len(photos):] if b.get("box")]
