@@ -1092,3 +1092,17 @@ def test_custom_captions():
     tl.images = list(imgs)
     caps = [c[0] for c in tl.captions(0)]
     assert caps[0] == "Paris" and caps[1] != "Paris"
+
+
+def test_collage_boxes_roundtrip_without_photos(tmp_path):
+    from photosheet.core import preset
+    from photosheet.core.geometry import PageExtent
+    from photosheet.core.layouts import Collage, ImageItem
+    a = Collage(page=PageExtent(595, 842), images=[ImageItem("a.jpg", box=(10, 20, 100, 50), angle=15), ImageItem("b.jpg", box=(5, 5, 40, 40))])
+    f = tmp_path / "x.collage"
+    preset.save_boxes(a, str(f))
+    assert "a.jpg" not in f.read_text()
+    b = Collage(page=PageExtent(100, 100), images=[ImageItem("n1.jpg"), ImageItem("n2.jpg"), ImageItem("n3.jpg")])
+    preset.apply_boxes(b, str(f))
+    assert b.page.width == 595 and b.images[0].box == (10, 20, 100, 50) and b.images[0].angle == 15
+    assert b.images[2].box is None and b.images[0].path == "n1.jpg"

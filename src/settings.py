@@ -62,6 +62,11 @@ def path() -> Path:
     return Path(base) / "PhotoSheet" / "settings.toml"
 
 
+def collages_dir() -> Path:
+    """Where the user's saved collages live: one .phs file each, beside settings.toml."""
+    return path().parent / "collages"
+
+
 def _same_type(v, default) -> bool:
     if isinstance(default, bool) or isinstance(v, bool):
         return type(v) is type(default)

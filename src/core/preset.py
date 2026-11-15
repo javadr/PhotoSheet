@@ -70,3 +70,26 @@ def save(layout: Layout, path: str) -> None:
 def load(path: str) -> Layout:
     with open(path) as f:
         return from_dict(json.load(f))
+
+
+def save_boxes(layout: Collage, path: str) -> None:
+    """Only a collage's arrangement (page, snap, each photo's box and angle), never the photos."""
+    text = json.dumps({"page": asdict(layout.page), "snap": layout.snap,
+                       "boxes": [{"box": i.box, "angle": i.angle} for i in layout.images]}, indent=2)
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def apply_boxes(layout: Collage, path: str) -> None:
+    """Put the saved boxes on the current photos in order; photos beyond the saved ones are placed automatically."""
+    with open(path) as f:
+        d = json.load(f)
+    page = PageExtent(**_known(PageExtent, d["page"]))
+    if not (0 < page.width <= MAX_PT and 0 < page.height <= MAX_PT):
+        raise ValueError(f"page size must be between 0 and {MAX_PT} pt")
+    boxes = d["boxes"]
+    layout.page, layout.snap = page, bool(d.get("snap", True))
+    for n, img in enumerate(layout.images):
+        b = boxes[n] if n < len(boxes) else {}
+        img.box = tuple(b["box"]) if b.get("box") else None
+        img.angle = float(b.get("angle", 0.0))

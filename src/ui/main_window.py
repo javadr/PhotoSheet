@@ -16,7 +16,7 @@ from PySide6.QtGui import QGuiApplication, QIcon, QStandardItem, QStandardItemMo
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QStyledItemDelegate, QStyleOptionViewItem, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
-    QHBoxLayout, QLabel, QListWidget, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
+    QHBoxLayout, QInputDialog, QLabel, QListWidget, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
     QFrame, QGraphicsDropShadowEffect, QLineEdit, QSlider, QStyle, QStyleOptionToolButton, QStylePainter, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
 
@@ -972,6 +972,11 @@ class MainWindow(QMainWindow):
         self.snap.setChecked(True)
         self.snap.setToolTip("Moves and resizes snap to the page edges and centre, and to other photos.\n"
                              "Hold Ctrl while dragging to turn snapping off for that drag.")
+        # One pull-down button (HIG pull-down-buttons.md): saving, loading and deleting are all about the saved collages.
+        self.collage_lib = QPushButton("My Collages")
+        self.collage_lib.setToolTip("Save this collage, or load one you saved earlier.")
+        self.collage_lib.setMenu(QMenu(self.collage_lib))
+        self.collage_lib.menu().aboutToShow.connect(self._fill_my_collages)
         self.arrange_btn = QPushButton("Auto-arrange")
         self.arrange_btn.clicked.connect(self._auto_arrange)
         self.mat = self._spin(0, 200, 36)
@@ -1089,7 +1094,7 @@ class MainWindow(QMainWindow):
             ("strip", "Strip length (mm)", self.strip_h), ("strip,filmstrip", "Direction", self.direction),
             ("polaroid", "Border (pt)", self.border), ("triptych", "Panels", self.panels),
             ("triptych", "", self.vertical), ("package", "Sheet", self.recipe),
-            ("collage", "", self.snap), ("collage", "", self.arrange_btn), ("collage", "", self.collage_hint),
+            ("collage", "", self.collage_lib), ("collage", "", self.snap), ("collage", "", self.arrange_btn), ("collage", "", self.collage_hint),
             ("framed", "Mat width (pt)", self.mat), ("framed", "Mat colour", self.mat_color),
             ("badges", "Badge size", self.badge_size), ("disc", "Label size", self.disc_size), ("badges,disc", "Diameter (mm)", self.diameter), ("disc", "Hole (mm)", self.disc_hole), ("disc", "Photos per disc", self.disc_n), ("disc", "", self.disc_tile),
             ("cassette,vhs,cover", "Arrangement", self.case_mode), ("cover", "Case", self.cover_size), ("badges", "Pin-back margin (mm)", self.bleed), ("badges", "", self.fill_margin), ("badges", "", self.staggered),
@@ -1112,7 +1117,7 @@ class MainWindow(QMainWindow):
             if isinstance(w, SliderSpin):
                 w.set_label(label)
             self.rowsof.setdefault(key, []).append(w)
-            if any(w is x for x in (self.size_preset, self.badge_size, self.disc_size, self.per_sheet, self.recipe, self.arrange_btn, self.collage_hint,
+            if any(w is x for x in (self.size_preset, self.badge_size, self.disc_size, self.per_sheet, self.recipe, self.arrange_btn, self.collage_hint, self.collage_lib,
                                    self.shuffle_btn)):
                 continue  # wired separately (presets, recipe, button) or have no value to watch
             w_changed = getattr(w, "currentIndexChanged", None) or getattr(w, "toggled", None) or w.valueChanged
@@ -2698,6 +2703,55 @@ class MainWindow(QMainWindow):
                 preset.save(self.layout_, f)
             except OSError as e:
                 QMessageBox.warning(self, "Save preset", f"Could not save {os.path.basename(f)}: {e}")
+
+    def _fill_my_collages(self):
+        m = self.collage_lib.menu()
+        m.clear()
+        m.addAction("Save Current Collage…", self.save_my_collage)
+        files = sorted(settings.collages_dir().glob("*.collage"), key=lambda p: p.stem.lower())
+        m.addSeparator()
+        for f in files:
+            m.addAction(f.stem, lambda f=f: self.load_my_collage(f))
+        if not files:
+            m.addAction("No Saved Collages").setEnabled(False)
+        else:
+            m.addSeparator()
+            d = m.addMenu("Delete")
+            for f in files:
+                d.addAction(f.stem, lambda f=f: self._delete_my_collage(f))
+
+    def load_my_collage(self, f):
+        if not isinstance(self.layout_, Collage):
+            return
+        try:
+            preset.apply_boxes(self.layout_, str(f))
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            QMessageBox.warning(self, "Load collage", f"Could not load “{f.stem}”: {e}")
+            return
+        self._sync_controls()
+        self.refresh()
+
+    def save_my_collage(self):
+        name, ok = QInputDialog.getText(self, "Save collage", "Name for this collage:")
+        name = name.translate(str.maketrans({c: "-" for c in '<>:"/\\|?*'})).strip(" .")   # a safe file name
+        if not (ok and name):
+            return
+        d = settings.collages_dir()
+        f = d / (name + ".collage")
+        if f.exists() and QMessageBox.question(self, "Save collage", f"Replace the saved collage “{name}”?") != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            preset.save_boxes(self.layout_, str(f))
+        except OSError as e:
+            QMessageBox.warning(self, "Save collage", f"Could not save “{name}”: {e}")
+
+    def _delete_my_collage(self, f):
+        if QMessageBox.question(self, "Delete collage", f"Delete “{f.stem}”? This can't be undone.") == QMessageBox.StandardButton.Yes:
+            try:
+                f.unlink()
+            except OSError as e:
+                QMessageBox.warning(self, "Delete collage", f"Could not delete “{f.stem}”: {e}")
 
     def export(self):
         if self._export:
