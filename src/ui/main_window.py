@@ -11,11 +11,11 @@ import random
 
 from PIL import Image
 from PySide6 import __version__ as PYSIDE_VERSION
-from PySide6.QtCore import QRect, QSize, qVersion, QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QTimer, QRect, QSize, qVersion, QEvent, QObject, QPointF, QRectF, QRunnable, QSettings, QSizeF, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QIcon, QStandardItem, QStandardItemModel, QAction, QColor, QImage, QKeySequence, QMouseEvent, QPageSize, QPainter, QPainterPath, QPalette, QPen, QPolygonF, QFont, QPixmap, QUndoCommand, QUndoStack
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QStyledItemDelegate, QStyleOptionViewItem, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
+    QAbstractItemView, QApplication, QCompleter, QStyledItemDelegate, QStyleOptionViewItem, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout,
     QHBoxLayout, QInputDialog, QLabel, QWidgetAction, QListWidget, QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSpinBox,
     QFrame, QGraphicsDropShadowEffect, QGroupBox, QLineEdit, QSlider, QStyle, QStyleOptionToolButton, QStylePainter, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )
@@ -294,6 +294,14 @@ class _ExportJob(QRunnable):
             self.sig.export_done.emit(res)
         except RuntimeError:
             pass  # window closed meanwhile
+
+
+class _KindCombo(QComboBox):
+    """Editable (searchable) combo whose setCurrentText still selects the item, as on a plain combo."""
+    def setCurrentText(self, text):
+        i = self.findText(text)
+        if i >= 0:
+            self.setCurrentIndex(i)
 
 
 class _GroupedDelegate(QStyledItemDelegate):
@@ -909,7 +917,7 @@ class MainWindow(QMainWindow):
         box.exec()
 
     def _build_layout_dock(self):
-        self.kind = QComboBox()
+        self.kind = _KindCombo()
         model = QStandardItemModel(self.kind)
         for group, names in KIND_GROUPS:                      # headings cannot be picked; the layouts under them can
             head = QStandardItem(group)
@@ -923,6 +931,15 @@ class MainWindow(QMainWindow):
         self.kind.setModel(model)
         self.kind.setItemDelegate(_GroupedDelegate(self.kind))
         self.kind.setCurrentText("N-up")
+        # Searchable: type any part of a name to filter; the dropdown still works. NoInsert keeps the model fixed.
+        self.kind.setEditable(True)
+        self.kind.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        comp = self.kind.completer()
+        comp.setFilterMode(Qt.MatchFlag.MatchContains)
+        comp.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        # Half-typed text must never reach currentText() (KEYS[...] lookups): snap back to the chosen layout.
+        self.kind.lineEdit().editingFinished.connect(lambda: QTimer.singleShot(0, lambda: self.kind.setEditText(self.kind.itemText(self.kind.currentIndex()))))
         self.kind.setMaxVisibleItems(46)                      # the whole list fits: no scrolling inside a menu
         self.page_size = QComboBox()
         for name, (w, h) in PAGES.items():   # shown with its exact size; the plain name stays as the item's data
