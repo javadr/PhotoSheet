@@ -8,6 +8,7 @@ TWINE := $(if $(HAS_UV),uvx twine,twine)
 VENV:=$(shell echo "$${VIRTUAL_ENV-}")
 BIN:=$(if $(VENV),$(VIRTUAL_ENV)/bin,$(HOME)/.local/bin)
 APP_DESKTOP:=$(HOME)/.local/share/applications/photosheet.desktop
+APP_MIME:=$(HOME)/.local/share/mime/packages/photosheet.xml
 APP_ICON:=$(HOME)/.local/share/icons/photosheet.png
 
 .ONESHELL:
@@ -43,7 +44,8 @@ install-desktop-file: ## Generate a desktop launcher for the GUI app
 	[Desktop Entry]
 	Name=PhotoSheet
 	Keywords=PhotoSheet;Photo;Print;Contact sheet;
-	Exec=$(BIN)/photosheet
+	Exec=$(BIN)/photosheet %f
+	MimeType=application/x-photosheet-preset;
 	Icon=photosheet
 	StartupWMClass=photosheet
 	Version=$(VER)
@@ -55,6 +57,12 @@ install-desktop-file: ## Generate a desktop launcher for the GUI app
 	EOF
 	mv $(APP_DESKTOP).tmp $(APP_DESKTOP)
 	@chmod +x $(APP_DESKTOP)
+	@mkdir -p $(dir $(APP_MIME))
+	printf '%s\n' '<?xml version="1.0"?>' '<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">' \
+	  '<mime-type type="application/x-photosheet-preset"><comment>PhotoSheet preset</comment><icon name="photosheet"/><glob pattern="*.phs"/></mime-type>' \
+	  '</mime-info>' > $(APP_MIME)
+	-update-mime-database $(HOME)/.local/share/mime
+	-update-desktop-database $(HOME)/.local/share/applications
 	@echo "Desktop file generated successfully."
 
 .PHONY: install-dev
@@ -69,7 +77,7 @@ install-pypi: ver install-desktop-file ## Install the current version from PyPI 
 uninstall: ## Uninstall photosheet and remove its desktop file
 	@echo "Uninstalling photosheet ..."
 	@$(PKG_TOOL) uninstall photosheet
-	rm -fv $(APP_DESKTOP) $(APP_ICON)
+	rm -fv $(APP_DESKTOP) $(APP_ICON) $(APP_MIME)
 
 setup: ver ## Build source and wheel distribution packages
 	@rm -rf dist

@@ -2676,19 +2676,22 @@ class MainWindow(QMainWindow):
 
     # ---- files ----
     def open_preset(self):
-        f, _ = QFileDialog.getOpenFileName(self, "Open preset", self.prefs["paths"]["presets_dir"], "Preset (*.json)")
+        f, _ = QFileDialog.getOpenFileName(self, "Open preset", self.prefs["paths"]["presets_dir"], "Preset (*.phs *.json)")
         if f:
-            self._remember_dir("presets_dir", f)
-            try:
-                self.layout_ = preset.load(f)
-            except Exception as e:
-                QMessageBox.warning(self, "Open preset", str(e))
-                return
-            self._sync_controls()
-            self.refresh()
+            self.load_preset(f)
+
+    def load_preset(self, f: str) -> None:
+        self._remember_dir("presets_dir", f)
+        try:
+            self.layout_ = preset.load(f)
+        except Exception as e:
+            QMessageBox.warning(self, "Open preset", str(e))
+            return
+        self._sync_controls()
+        self.refresh()
 
     def save_preset(self):
-        f, _ = QFileDialog.getSaveFileName(self, "Save preset", self._suggested_path("presets_dir", ".json"), "Preset (*.json)")
+        f, _ = QFileDialog.getSaveFileName(self, "Save preset", self._suggested_path("presets_dir", ".phs"), "Preset (*.phs)")
         if f:
             self._remember_dir("presets_dir", f)
             try:
