@@ -183,3 +183,7 @@ make help      # lists all targets
 
 The layout and rendering code (`src/core/`) does not import Qt, so it can be tested and used on
 its own. The window lives in `src/ui/`.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
